@@ -22,12 +22,53 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 22px max(18px, calc((100% - 1180px) / 2));
+  background: #ffffff;
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar p,
+.section-heading p {
+  margin: 0 0 6px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.topbar h1,
+h2,
+h3 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.topbar h1 {
+  font-size: 28px;
+}
+
+h2 {
+  font-size: 26px;
+}
+
+h3 {
+  font-size: 18px;
+}
+
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .shell {
-  display: grid;
-  grid-template-columns: minmax(320px, 1.15fr) minmax(320px, 0.85fr);
-  gap: 24px;
   width: min(1180px, calc(100% - 32px));
-  margin: 32px auto;
+  margin: 28px auto;
 }
 
 .panel {
@@ -38,32 +79,15 @@ body {
   box-shadow: 0 10px 28px rgba(22, 32, 42, 0.08);
 }
 
-.section-heading p {
-  margin: 0 0 6px;
-  color: var(--accent);
-  font-size: 13px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-h1,
-h2 {
-  margin: 0;
-  letter-spacing: 0;
-}
-
-h1 {
-  font-size: 30px;
-}
-
-h2 {
-  font-size: 18px;
+form,
+.stack,
+.results {
+  display: grid;
+  gap: 14px;
 }
 
 form {
-  display: grid;
-  gap: 16px;
-  margin-top: 22px;
+  margin-top: 20px;
 }
 
 label {
@@ -74,7 +98,8 @@ label {
   font-weight: 700;
 }
 
-input {
+input,
+textarea {
   width: 100%;
   min-height: 44px;
   border: 1px solid var(--line);
@@ -85,7 +110,13 @@ input {
   background: #fff;
 }
 
-input:focus {
+textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+input:focus,
+textarea:focus {
   border-color: var(--accent);
   outline: 3px solid rgba(15, 118, 110, 0.16);
 }
@@ -116,36 +147,55 @@ button:hover {
   background: var(--accent-dark);
 }
 
-.students-header,
-.search-row {
-  display: flex;
-  align-items: center;
+.grid-2,
+.grid-3,
+.student-row {
+  display: grid;
   gap: 12px;
+  align-items: end;
 }
 
-.students-header {
-  justify-content: space-between;
-  margin-top: 6px;
+.grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.grid-3 {
+  grid-template-columns: 1fr 1fr auto;
 }
 
 .student-row {
-  display: grid;
   grid-template-columns: 1fr 0.8fr 0.8fr auto;
-  gap: 10px;
+}
+
+.question-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
   align-items: end;
+}
+
+.list-heading,
+.search-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.student-row,
+.question-row,
+.item {
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #f9fbfc;
 }
 
-.remove-student {
+.remove-button {
   color: var(--danger);
 }
 
 .results {
-  display: grid;
-  gap: 10px;
   margin-top: 16px;
 }
 
@@ -156,7 +206,8 @@ button:hover {
   text-align: left;
 }
 
-.result-button span {
+.result-button span,
+.item span {
   color: var(--muted);
   font-size: 13px;
   font-weight: 400;
@@ -170,9 +221,30 @@ button:hover {
   font-weight: 700;
 }
 
+.admin-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 22px;
+  margin-top: 22px;
+}
+
+.admin-detail {
+  display: grid;
+  gap: 16px;
+}
+
+.add-question-form {
+  margin-top: 0;
+}
+
+.item p {
+  margin: 8px 0;
+  color: var(--ink);
+}
+
 .status {
   min-height: 20px;
-  margin: 0;
+  margin: 12px 0 0;
   color: var(--muted);
   font-weight: 700;
 }
@@ -186,16 +258,23 @@ button:hover {
 }
 
 @media (max-width: 860px) {
-  .shell {
-    grid-template-columns: 1fr;
-  }
-
-  .student-row {
-    grid-template-columns: 1fr;
-  }
-
+  .topbar,
+  .list-heading,
   .search-row {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  nav,
+  nav button {
+    width: 100%;
+  }
+
+  .grid-2,
+  .grid-3,
+  .student-row,
+  .question-row,
+  .admin-layout {
+    grid-template-columns: 1fr;
   }
 }
