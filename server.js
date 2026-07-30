@@ -13,13 +13,38 @@ if (!process.env.DATABASE_URL) {
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes('sslmode=require')
+  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes('sslmode=')
     ? { rejectUnauthorized: false }
     : undefined
 });
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+async function initializeDatabase() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS exams (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name STRING NOT NULL UNIQUE,
+      examiner_name STRING NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS exam_students (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      exam_id UUID NOT NULL REFERENCES exams (id) ON DELETE CASCADE,
+      full_name STRING NOT NULL,
+      username STRING NOT NULL,
+      password_hash STRING NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (exam_id, username)
+    )
+  `);
+
+  await pool.query('CREATE INDEX IF NOT EXISTS exam_students_exam_id_idx ON exam_students (exam_id)');
+}
 
 app.get('/api/health', async (req, res) => {
   try {
@@ -73,12 +98,13 @@ app.post('/api/exams', async (req, res) => {
     res.status(201).json({ exam, studentCount: cleanStudents.length });
   } catch (error) {
     await client.query('ROLLBACK');
+    console.error('Create exam error:', error);
 
     if (error.code === '23505') {
       return res.status(409).json({ message: 'That exam name or student username is already used.' });
     }
 
-    res.status(500).json({ message: 'Could not create exam.' });
+    res.status(500).json({ message: error.message || 'Could not create exam.' });
   } finally {
     client.release();
   }
@@ -139,6 +165,13 @@ app.post('/api/student-login', async (req, res) => {
   }
 });
 
-app.listen(port, () => {
-  console.log(`Exam portal running at http://localhost:${port}`);
-});
+initializeDatabase()
+  .then(() => {
+    app.listen(port, () => {
+      console.log(`Exam portal running at http://localhost:${port}`);
+    });
+  })
+  .catch((error) => {
+    console.error('Database initialization failed:', error);
+    process.exit(1);
+  });

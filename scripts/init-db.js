@@ -15,7 +15,7 @@ async function initDatabase() {
   }
 
   const schema = fs.readFileSync(path.join(__dirname, '..', 'db', 'schema.sql'), 'utf8');
-  const ssl = process.env.DATABASE_URL.includes('sslmode=require')
+  const ssl = process.env.DATABASE_URL.includes('sslmode=')
     ? { rejectUnauthorized: false }
     : undefined;
 
@@ -30,9 +30,7 @@ async function initDatabase() {
 
   const appClient = new Client({
     connectionString: connectionStringForDatabase('exam_portal'),
-    ssl: process.env.DATABASE_URL.includes('sslmode=require')
-      ? { rejectUnauthorized: false }
-      : undefined
+    ssl
   });
 
   await appClient.connect();
