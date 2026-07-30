@@ -11,17 +11,35 @@ if (!process.env.DATABASE_URL) {
   console.warn('DATABASE_URL is not set. Add it to .env before using CockroachDB.');
 }
 
+function connectionStringForDatabase(databaseName) {
+  const url = new URL(process.env.DATABASE_URL);
+  url.pathname = `/${databaseName}`;
+  return url.toString();
+}
+
+const ssl = process.env.DATABASE_URL && process.env.DATABASE_URL.includes('sslmode=')
+  ? { rejectUnauthorized: false }
+  : undefined;
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes('sslmode=')
-    ? { rejectUnauthorized: false }
-    : undefined
+  connectionString: process.env.DATABASE_URL
+    ? connectionStringForDatabase('exam_portal')
+    : undefined,
+  ssl
 });
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 async function initializeDatabase() {
+  const adminPool = new Pool({
+    connectionString: connectionStringForDatabase('defaultdb'),
+    ssl
+  });
+
+  await adminPool.query('CREATE DATABASE IF NOT EXISTS exam_portal');
+  await adminPool.end();
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS exams (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
