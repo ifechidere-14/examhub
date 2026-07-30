@@ -1,0 +1,17 @@
+{
+  "name": "exam-portal-cockroach",
+  "version": "1.0.0",
+  "description": "Examiner and student exam portal backed by CockroachDB.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "db:init": "node scripts/init-db.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
+  }
+}

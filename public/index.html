@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Exam Portal</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="panel examiner-panel">
+        <div class="section-heading">
+          <p>Examiner</p>
+          <h1>Create an exam</h1>
+        </div>
+
+        <form id="exam-form">
+          <label>
+            Exam name
+            <input name="examName" placeholder="Biology Final 2026" required>
+          </label>
+
+          <label>
+            Examiner name
+            <input name="examinerName" placeholder="Mrs. Mensah" required>
+          </label>
+
+          <div class="students-header">
+            <h2>Students</h2>
+            <button type="button" id="add-student">Add student</button>
+          </div>
+
+          <div id="students-list"></div>
+
+          <button class="primary" type="submit">Create exam</button>
+          <p class="status" id="create-status"></p>
+        </form>
+      </section>
+
+      <section class="panel student-panel">
+        <div class="section-heading">
+          <p>Student</p>
+          <h1>Find your exam</h1>
+        </div>
+
+        <form id="search-form" class="search-row">
+          <input id="exam-search" placeholder="Search exam name" required>
+          <button type="submit">Search</button>
+        </form>
+
+        <div id="search-results" class="results"></div>
+
+        <form id="login-form" class="login-form hidden">
+          <input type="hidden" id="selected-exam-id">
+          <div class="selected-exam" id="selected-exam-name"></div>
+
+          <label>
+            Username
+            <input id="student-username" autocomplete="username" required>
+          </label>
+
+          <label>
+            Password
+            <input id="student-password" type="password" autocomplete="current-password" required>
+          </label>
+
+          <button class="primary" type="submit">Log in</button>
+          <p class="status" id="login-status"></p>
+        </form>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
