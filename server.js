@@ -202,7 +202,7 @@ async function initializeDatabase() {
     )
   `);
 
-  await pool.query('ALTER TABLE exams ADD COLUMN IF NOT EXISTS status STRING NOT NULL DEFAULT \"draft\"');
+  await pool.query("ALTER TABLE exams ADD COLUMN IF NOT EXISTS status STRING NOT NULL DEFAULT 'draft'");
   await pool.query('ALTER TABLE exams ADD COLUMN IF NOT EXISTS start_at TIMESTAMPTZ');
   await pool.query('ALTER TABLE exams ADD COLUMN IF NOT EXISTS end_at TIMESTAMPTZ');
   await pool.query('ALTER TABLE exams ADD COLUMN IF NOT EXISTS passing_score INT');
