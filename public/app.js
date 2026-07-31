@@ -26,7 +26,11 @@ const adminQuestionText = document.querySelector('#admin-question-text');
 const adminQuestions = document.querySelector('#admin-questions');
 const adminAnswers = document.querySelector('#admin-answers');
 const adminResults = document.querySelector('#admin-results');
+const adminAnalytics = document.querySelector('#admin-analytics');
+const adminRoom = document.querySelector('#admin-room');
 const exportResultsButton = document.querySelector('#export-results-button');
+const languageSwitch = document.querySelector('#language-switch');
+const themeToggle = document.querySelector('#theme-toggle');
 const searchForm = document.querySelector('#search-form');
 const examSearch = document.querySelector('#exam-search');
 const examStatusFilter = document.querySelector('#exam-status-filter');
@@ -37,6 +41,7 @@ const selectedExamName = document.querySelector('#selected-exam-name');
 const loginStatus = document.querySelector('#login-status');
 const answerForm = document.querySelector('#answer-form');
 const studentExamTitle = document.querySelector('#student-exam-title');
+const studentTimer = document.querySelector('#student-timer');
 const answerQuestions = document.querySelector('#answer-questions');
 const answerStatus = document.querySelector('#answer-status');
 const studentHistory = document.querySelector('#student-history');
@@ -49,6 +54,9 @@ const studentLogoutButton = document.querySelector('#student-logout');
 let currentExaminer = null;
 let currentAdminExamId = null;
 let currentStudent = null;
+let currentStudentTimer = null;
+let currentLanguage = 'en';
+let darkModeEnabled = false;
 
 function setStatus(element, message, isError = false) {
   element.textContent = message;
@@ -64,6 +72,92 @@ function formatDateTime(value) {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return 'Not set';
   return parsed.toLocaleString();
+}
+
+function translateUi() {
+  const translations = {
+    en: {
+      pageTitle: 'Online exam workspace',
+      navCreate: 'Create Exam',
+      navAdmin: 'Examiner Admin',
+      navStudent: 'Student Exam',
+      roleExaminer: 'Examiner',
+      createHeading: 'Create exam and account',
+      roleAdmin: 'Admin',
+      adminHeading: 'Manage exams and answers',
+      roleStudent: 'Student',
+      studentHeading: 'Find and write your exam',
+      languageLabel: 'Language'
+    },
+    pt: {
+      pageTitle: 'Espaço de provas online',
+      navCreate: 'Criar prova',
+      navAdmin: 'Admin do examinador',
+      navStudent: 'Prova do aluno',
+      roleExaminer: 'Examinador',
+      createHeading: 'Criar prova e conta',
+      roleAdmin: 'Admin',
+      adminHeading: 'Gerir provas e respostas',
+      roleStudent: 'Aluno',
+      studentHeading: 'Encontrar e responder à prova',
+      languageLabel: 'Idioma'
+    },
+    fr: {
+      pageTitle: 'Espace d’examen en ligne',
+      navCreate: 'Créer un examen',
+      navAdmin: 'Admin examinateur',
+      navStudent: 'Examen étudiant',
+      roleExaminer: 'Examinateur',
+      createHeading: 'Créer un examen et un compte',
+      roleAdmin: 'Admin',
+      adminHeading: 'Gérer les examens et réponses',
+      roleStudent: 'Étudiant',
+      studentHeading: 'Trouver et passer l’examen',
+      languageLabel: 'Langue'
+    }
+  };
+
+  const content = translations[currentLanguage] || translations.en;
+  document.querySelectorAll('[data-i18n]').forEach((element) => {
+    const key = element.getAttribute('data-i18n');
+    if (content[key]) {
+      element.textContent = content[key];
+    }
+  });
+}
+
+function applyTheme() {
+  document.body.classList.toggle('dark', darkModeEnabled);
+  themeToggle.textContent = darkModeEnabled ? 'Light mode' : 'Dark mode';
+}
+
+function startStudentTimer(durationMinutes) {
+  if (!durationMinutes || Number(durationMinutes) <= 0) {
+    studentTimer.classList.add('hidden');
+    return;
+  }
+
+  const totalSeconds = Number(durationMinutes) * 60;
+  let remainingSeconds = totalSeconds;
+  studentTimer.classList.remove('hidden');
+  studentTimer.textContent = `Time left: ${Math.floor(totalSeconds / 60)}m`;
+
+  if (currentStudentTimer) clearInterval(currentStudentTimer);
+  currentStudentTimer = setInterval(() => {
+    remainingSeconds -= 1;
+    const minutes = Math.floor(remainingSeconds / 60);
+    const seconds = remainingSeconds % 60;
+    studentTimer.textContent = `Time left: ${minutes}m ${seconds.toString().padStart(2, '0')}s`;
+    if (remainingSeconds <= 0) {
+      clearInterval(currentStudentTimer);
+      studentTimer.textContent = 'Time is up';
+      answerForm.requestSubmit();
+    }
+  }, 1000);
+}
+
+function showTabWarning() {
+  setStatus(answerStatus, 'Please stay on this tab while taking the exam.', true);
 }
 
 function createInputRow(className, fields) {
@@ -355,6 +449,9 @@ examForm.addEventListener('submit', async (event) => {
         startAt: examForm.examStart.value || null,
         endAt: examForm.examEnd.value || null,
         passingScore: examForm.passingScore.value || null,
+        randomizeQuestions: examForm.randomizeQuestions.checked,
+        durationMinutes: examForm.durationMinutes.value || null,
+        roomCode: examForm.roomCode.value || null,
         students,
         questions
       })
@@ -420,6 +517,10 @@ async function loadExaminerExams() {
 async function loadAdminExam(examId) {
   currentAdminExamId = examId;
   const data = await requestJson(`/api/exams/${examId}/admin?examinerId=${encodeURIComponent(currentExaminer.examinerId)}`);
+  const [analytics, room] = await Promise.all([
+    requestJson(`/api/exams/${examId}/analytics`).catch(() => null),
+    requestJson(`/api/exams/${examId}/room`).catch(() => null)
+  ]);
   adminExamTitle.textContent = data.exam.name;
   adminExamMeta.innerHTML = `
     <p><strong>Status:</strong> ${data.exam.status}</p>
@@ -431,6 +532,27 @@ async function loadAdminExam(examId) {
   adminQuestions.innerHTML = '';
   adminAnswers.innerHTML = '';
   adminResults.innerHTML = '';
+  adminAnalytics.innerHTML = '';
+  adminRoom.innerHTML = '';
+  adminAnalytics.classList.toggle('hidden', !analytics);
+  adminRoom.classList.toggle('hidden', !room);
+
+  if (analytics) {
+    adminAnalytics.innerHTML = `
+      <p><strong>Students:</strong> ${analytics.student_count ?? 0}</p>
+      <p><strong>Submitted:</strong> ${analytics.submitted_count ?? 0}</p>
+      <p><strong>Graded:</strong> ${analytics.graded_count ?? 0}</p>
+      <p><strong>Average score:</strong> ${analytics.average_score ?? 'N/A'}</p>
+      <p><strong>Passes:</strong> ${analytics.pass_count ?? 0}</p>
+    `;
+  }
+
+  if (room) {
+    adminRoom.innerHTML = `
+      <p><strong>Room:</strong> ${room.room_code || 'No room code'}</p>
+      <p><strong>Participants:</strong> ${room.participant_count ?? 0}</p>
+    `;
+  }
 
   if (!data.questions.length) {
     adminQuestions.textContent = 'No questions yet.';
@@ -643,6 +765,7 @@ loginForm.addEventListener('submit', async (event) => {
     });
 
     studentExamTitle.textContent = `${currentStudent.examName} - ${currentStudent.studentName}`;
+    startStudentTimer(currentStudent.durationMinutes);
     answerQuestions.innerHTML = '';
 
     if (!currentStudent.questions.length) {
@@ -697,7 +820,24 @@ studentLogoutButton.addEventListener('click', async () => {
   setStatus(loginStatus, 'Logged out.');
 });
 
+languageSwitch.addEventListener('change', () => {
+  currentLanguage = languageSwitch.value;
+  translateUi();
+});
+
+themeToggle.addEventListener('click', () => {
+  darkModeEnabled = !darkModeEnabled;
+  applyTheme();
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (!currentStudent || document.visibilityState !== 'hidden') return;
+  showTabWarning();
+});
+
 addStudentRow();
 addQuestionRow();
+translateUi();
+applyTheme();
 restoreExaminerSession();
 restoreStudentSession();

@@ -10,20 +10,31 @@
     <header class="topbar">
       <div>
         <p>ExamHub</p>
-        <h1>Online exam workspace</h1>
+        <h1 data-i18n="pageTitle">Online exam workspace</h1>
+      </div>
+      <div class="toolbar-controls">
+        <label class="lang-select">
+          <span data-i18n="languageLabel">Language</span>
+          <select id="language-switch">
+            <option value="en">English</option>
+            <option value="pt">Português</option>
+            <option value="fr">Français</option>
+          </select>
+        </label>
+        <button type="button" id="theme-toggle">Dark mode</button>
       </div>
       <nav>
-        <button type="button" data-view="create-view">Create Exam</button>
-        <button type="button" data-view="admin-view">Examiner Admin</button>
-        <button type="button" data-view="student-view">Student Exam</button>
+        <button type="button" data-view="create-view" data-i18n="navCreate">Create Exam</button>
+        <button type="button" data-view="admin-view" data-i18n="navAdmin">Examiner Admin</button>
+        <button type="button" data-view="student-view" data-i18n="navStudent">Student Exam</button>
       </nav>
     </header>
 
     <main class="shell">
       <section id="create-view" class="panel view">
         <div class="section-heading">
-          <p>Examiner</p>
-          <h2>Create exam and account</h2>
+          <p data-i18n="roleExaminer">Examiner</p>
+          <h2 data-i18n="createHeading">Create exam and account</h2>
         </div>
 
         <form id="exam-form">
@@ -57,12 +68,24 @@
               <input name="passingScore" type="number" min="0" placeholder="60">
             </label>
             <label>
+              Duration (minutes)
+              <input name="durationMinutes" type="number" min="0" placeholder="60">
+            </label>
+            <label>
+              Room code
+              <input name="roomCode" placeholder="A101">
+            </label>
+            <label>
               Start time
               <input name="examStart" type="datetime-local">
             </label>
             <label>
               End time
               <input name="examEnd" type="datetime-local">
+            </label>
+            <label class="checkbox-row">
+              <input name="randomizeQuestions" type="checkbox">
+              Randomize questions for students
             </label>
           </div>
 
@@ -90,8 +113,8 @@
 
       <section id="admin-view" class="panel view hidden">
         <div class="section-heading">
-          <p>Admin</p>
-          <h2>Manage exams and answers</h2>
+          <p data-i18n="roleAdmin">Admin</p>
+          <h2 data-i18n="adminHeading">Manage exams and answers</h2>
         </div>
 
         <form id="examiner-login-form" class="grid-3">
@@ -157,6 +180,8 @@
             <section class="admin-detail">
               <div id="admin-exam-title" class="selected-exam">Select an exam</div>
               <div id="admin-exam-meta" class="meta-card"></div>
+              <div id="admin-analytics" class="meta-card hidden"></div>
+              <div id="admin-room" class="meta-card hidden"></div>
               <form id="add-question-form" class="add-question-form hidden">
                 <label>
                   New question
@@ -180,8 +205,8 @@
 
       <section id="student-view" class="panel view hidden">
         <div class="section-heading">
-          <p>Student</p>
-          <h2>Find and write your exam</h2>
+          <p data-i18n="roleStudent">Student</p>
+          <h2 data-i18n="studentHeading">Find and write your exam</h2>
         </div>
 
         <form id="search-form" class="search-row">
@@ -243,6 +268,7 @@
 
         <form id="answer-form" class="hidden">
           <div id="student-exam-title" class="selected-exam"></div>
+          <div id="student-timer" class="timer-badge hidden"></div>
           <div id="answer-questions" class="stack"></div>
           <button class="primary" type="submit">Submit answers</button>
           <p class="status" id="answer-status"></p>

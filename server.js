@@ -121,6 +121,15 @@ function buildInviteEmailContent({ recipient, examName, appUrl }) {
   };
 }
 
+function shuffleQuestions(questions) {
+  const items = [...questions];
+  for (let index = items.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [items[index], items[swapIndex]] = [items[swapIndex], items[index]];
+  }
+  return items;
+}
+
 async function initializeDatabase() {
   const adminPool = new Pool({
     connectionString: connectionStringForDatabase('defaultdb'),
@@ -206,6 +215,9 @@ async function initializeDatabase() {
   await pool.query('ALTER TABLE exams ADD COLUMN IF NOT EXISTS start_at TIMESTAMPTZ');
   await pool.query('ALTER TABLE exams ADD COLUMN IF NOT EXISTS end_at TIMESTAMPTZ');
   await pool.query('ALTER TABLE exams ADD COLUMN IF NOT EXISTS passing_score INT');
+  await pool.query('ALTER TABLE exams ADD COLUMN IF NOT EXISTS randomize_questions BOOLEAN NOT NULL DEFAULT false');
+  await pool.query('ALTER TABLE exams ADD COLUMN IF NOT EXISTS duration_minutes INT');
+  await pool.query('ALTER TABLE exams ADD COLUMN IF NOT EXISTS room_code STRING');
   await pool.query('CREATE INDEX IF NOT EXISTS exam_students_exam_id_idx ON exam_students (exam_id)');
   await pool.query('CREATE INDEX IF NOT EXISTS exam_questions_exam_id_idx ON exam_questions (exam_id)');
   await pool.query('CREATE INDEX IF NOT EXISTS student_answers_student_id_idx ON student_answers (student_id)');
@@ -232,7 +244,10 @@ app.post('/api/exams', async (req, res) => {
     examStatus,
     startAt,
     endAt,
-    passingScore
+    passingScore,
+    randomizeQuestions,
+    durationMinutes,
+    roomCode
   } = req.body;
 
   if (!examName || !examinerName || !examinerUsername || !examinerPassword || !Array.isArray(students) || students.length === 0) {
@@ -272,10 +287,15 @@ app.post('/api/exams', async (req, res) => {
     const passingScoreValue = passingScore === '' || passingScore === null || passingScore === undefined
       ? null
       : Number(passingScore);
+    const durationMinutesValue = durationMinutes === '' || durationMinutes === null || durationMinutes === undefined
+      ? null
+      : Number(durationMinutes);
+    const roomCodeValue = String(roomCode || '').trim() || null;
+    const randomizeQuestionsValue = Boolean(randomizeQuestions);
 
     const examResult = await client.query(
-      'INSERT INTO exams (name, examiner_name, examiner_id, status, start_at, end_at, passing_score) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, name, examiner_name, created_at, status, start_at, end_at, passing_score',
-      [examName.trim(), examinerName.trim(), examiner.id, normalizedStatus, startAtValue, endAtValue, passingScoreValue]
+      'INSERT INTO exams (name, examiner_name, examiner_id, status, start_at, end_at, passing_score, randomize_questions, duration_minutes, room_code) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id, name, examiner_name, created_at, status, start_at, end_at, passing_score, randomize_questions, duration_minutes, room_code',
+      [examName.trim(), examinerName.trim(), examiner.id, normalizedStatus, startAtValue, endAtValue, passingScoreValue, randomizeQuestionsValue, durationMinutesValue, roomCodeValue]
     );
 
     const exam = examResult.rows[0];
@@ -434,7 +454,7 @@ app.get('/api/examiners/me/exams', requireExaminer, async (req, res) => {
 app.get('/api/exams/:examId/admin', requireExaminer, async (req, res) => {
   try {
     const examResult = await pool.query(
-      'SELECT id, name, examiner_name, status, start_at, end_at, passing_score FROM exams WHERE id = $1 AND examiner_id = $2',
+      'SELECT id, name, examiner_name, status, start_at, end_at, passing_score, randomize_questions, duration_minutes, room_code FROM exams WHERE id = $1 AND examiner_id = $2',
       [req.params.examId, req.examiner.examinerId]
     );
     const exam = examResult.rows[0];
@@ -471,6 +491,56 @@ app.get('/api/exams/:examId/admin', requireExaminer, async (req, res) => {
   } catch (error) {
     console.error('Exam admin error:', error);
     res.status(500).json({ message: 'Could not load exam admin page.' });
+  }
+});
+
+app.get('/api/exams/:examId/analytics', requireExaminer, async (req, res) => {
+  try {
+    const examResult = await pool.query('SELECT id FROM exams WHERE id = $1 AND examiner_id = $2', [req.params.examId, req.examiner.examinerId]);
+    if (!examResult.rows[0]) {
+      return res.status(404).json({ message: 'Exam not found for this examiner.' });
+    }
+
+    const analyticsResult = await pool.query(
+      `SELECT e.id, e.name, COUNT(DISTINCT s.id) AS student_count,
+        COUNT(DISTINCT CASE WHEN r.status IN ('submitted', 'graded') THEN s.id END) AS submitted_count,
+        COUNT(DISTINCT CASE WHEN r.status = 'graded' THEN s.id END) AS graded_count,
+        AVG(r.score) AS average_score,
+        MAX(r.score) AS highest_score,
+        MIN(r.score) AS lowest_score,
+        COUNT(DISTINCT CASE WHEN r.score IS NOT NULL AND e.passing_score IS NOT NULL AND r.score >= e.passing_score THEN s.id END) AS pass_count,
+        COUNT(DISTINCT CASE WHEN r.score IS NOT NULL AND e.passing_score IS NOT NULL AND r.score < e.passing_score THEN s.id END) AS fail_count,
+        COUNT(DISTINCT CASE WHEN r.status = 'pending' THEN s.id END) AS pending_count
+       FROM exams e
+       LEFT JOIN exam_students s ON s.exam_id = e.id
+       LEFT JOIN exam_results r ON r.student_id = s.id AND r.exam_id = e.id
+       WHERE e.id = $1
+       GROUP BY e.id, e.name`,
+      [req.params.examId]
+    );
+
+    res.json(analyticsResult.rows[0]);
+  } catch (error) {
+    console.error('Analytics error:', error);
+    res.status(500).json({ message: 'Could not load analytics.' });
+  }
+});
+
+app.get('/api/exams/:examId/room', requireExaminer, async (req, res) => {
+  try {
+    const roomResult = await pool.query(
+      `SELECT e.id, e.room_code, COUNT(s.id) AS participant_count
+       FROM exams e
+       LEFT JOIN exam_students s ON s.exam_id = e.id
+       WHERE e.id = $1 AND e.examiner_id = $2
+       GROUP BY e.id, e.room_code`,
+      [req.params.examId, req.examiner.examinerId]
+    );
+
+    res.json(roomResult.rows[0] || { id: req.params.examId, room_code: null, participant_count: 0 });
+  } catch (error) {
+    console.error('Room info error:', error);
+    res.status(500).json({ message: 'Could not load room info.' });
   }
 });
 
@@ -572,7 +642,7 @@ app.post('/api/student-login', async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT s.id, s.full_name, s.password_hash, e.name AS exam_name, e.status AS exam_status, e.start_at, e.end_at
+      `SELECT s.id, s.full_name, s.password_hash, e.name AS exam_name, e.status AS exam_status, e.start_at, e.end_at, e.randomize_questions, e.duration_minutes, e.room_code
        FROM exam_students s
        JOIN exams e ON e.id = s.exam_id
        WHERE s.exam_id = $1 AND s.username = $2`,
@@ -598,6 +668,7 @@ app.post('/api/student-login', async (req, res) => {
       'SELECT id, question_text, question_order FROM exam_questions WHERE exam_id = $1 ORDER BY question_order, created_at',
       [examId]
     );
+    const orderedQuestions = student.randomize_questions ? shuffleQuestions(questionsResult.rows) : questionsResult.rows;
 
     setSessionCookie(res, 'student_session', {
       type: 'student',
@@ -611,7 +682,9 @@ app.post('/api/student-login', async (req, res) => {
       studentId: student.id,
       studentName: student.full_name,
       examName: student.exam_name,
-      questions: questionsResult.rows
+      questions: orderedQuestions,
+      durationMinutes: student.duration_minutes,
+      roomCode: student.room_code
     });
   } catch (error) {
     res.status(500).json({ message: 'Could not log in.' });
@@ -734,5 +807,6 @@ if (require.main === module) {
 
 module.exports = {
   app,
-  buildInviteEmailContent
+  buildInviteEmailContent,
+  shuffleQuestions
 };
