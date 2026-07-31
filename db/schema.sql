@@ -11,7 +11,11 @@ CREATE TABLE IF NOT EXISTS exams (
   examiner_id UUID REFERENCES examiners (id) ON DELETE SET NULL,
   name STRING NOT NULL UNIQUE,
   examiner_name STRING NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  status STRING NOT NULL DEFAULT 'draft',
+  start_at TIMESTAMPTZ,
+  end_at TIMESTAMPTZ,
+  passing_score INT
 );
 
 CREATE TABLE IF NOT EXISTS exam_students (
@@ -23,8 +27,6 @@ CREATE TABLE IF NOT EXISTS exam_students (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (exam_id, username)
 );
-
-CREATE INDEX IF NOT EXISTS exam_students_exam_id_idx ON exam_students (exam_id);
 
 CREATE TABLE IF NOT EXISTS exam_questions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -43,5 +45,29 @@ CREATE TABLE IF NOT EXISTS student_answers (
   UNIQUE (student_id, question_id)
 );
 
+CREATE TABLE IF NOT EXISTS exam_results (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  exam_id UUID NOT NULL REFERENCES exams (id) ON DELETE CASCADE,
+  student_id UUID NOT NULL REFERENCES exam_students (id) ON DELETE CASCADE,
+  status STRING NOT NULL DEFAULT 'pending',
+  score INT,
+  max_score INT,
+  feedback STRING,
+  submitted_at TIMESTAMPTZ,
+  graded_at TIMESTAMPTZ,
+  UNIQUE (exam_id, student_id)
+);
+
+CREATE TABLE IF NOT EXISTS exam_invites (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  exam_id UUID NOT NULL REFERENCES exams (id) ON DELETE CASCADE,
+  email STRING NOT NULL,
+  status STRING NOT NULL DEFAULT 'pending',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (exam_id, email)
+);
+
+CREATE INDEX IF NOT EXISTS exam_students_exam_id_idx ON exam_students (exam_id);
 CREATE INDEX IF NOT EXISTS exam_questions_exam_id_idx ON exam_questions (exam_id);
 CREATE INDEX IF NOT EXISTS student_answers_student_id_idx ON student_answers (student_id);
+CREATE INDEX IF NOT EXISTS exam_results_exam_id_idx ON exam_results (exam_id);

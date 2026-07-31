@@ -1,4 +1,5 @@
 const path = require('path');
+const crypto = require('crypto');
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { Pool } = require('pg');
@@ -6,9 +7,79 @@ require('dotenv').config();
 
 const app = express();
 const port = process.env.PORT || 3000;
+const sessionSecret = process.env.SESSION_SECRET || 'dev-session-secret';
 
 if (!process.env.DATABASE_URL) {
   console.warn('DATABASE_URL is not set. Add it to .env before using CockroachDB.');
+}
+
+function base64UrlEncode(value) {
+  return Buffer.from(value).toString('base64url');
+}
+
+function base64UrlDecode(value) {
+  return Buffer.from(value, 'base64url').toString('utf8');
+}
+
+function createSessionToken(payload) {
+  const encoded = base64UrlEncode(JSON.stringify(payload));
+  const signature = crypto.createHmac('sha256', sessionSecret).update(encoded).digest('hex');
+  return `${encoded}.${signature}`;
+}
+
+function verifySessionToken(token) {
+  if (!token) return null;
+
+  const [encoded, signature] = token.split('.');
+  if (!encoded || !signature) return null;
+
+  const expected = crypto.createHmac('sha256', sessionSecret).update(encoded).digest('hex');
+  if (expected !== signature) return null;
+
+  try {
+    return JSON.parse(base64UrlDecode(encoded));
+  } catch (error) {
+    return null;
+  }
+}
+
+function getSessionFromCookie(req, cookieName) {
+  const cookieHeader = req.headers.cookie || '';
+  const cookies = cookieHeader.split(';').map((entry) => entry.trim()).filter(Boolean);
+  const match = cookies.find((entry) => entry.startsWith(`${cookieName}=`));
+
+  if (!match) return null;
+  const rawValue = decodeURIComponent(match.slice(cookieName.length + 1));
+  return verifySessionToken(rawValue);
+}
+
+function setSessionCookie(res, cookieName, payload) {
+  const token = createSessionToken(payload);
+  res.setHeader('Set-Cookie', `${cookieName}=${encodeURIComponent(token)}; HttpOnly; Path=/; SameSite=Lax`);
+}
+
+function clearSessionCookie(res, cookieName) {
+  res.setHeader('Set-Cookie', `${cookieName}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax`);
+}
+
+function requireExaminer(req, res, next) {
+  const session = getSessionFromCookie(req, 'examiner_session');
+  if (!session || session.type !== 'examiner') {
+    return res.status(401).json({ message: 'Examiner session required.' });
+  }
+
+  req.examiner = session;
+  next();
+}
+
+function requireStudent(req, res, next) {
+  const session = getSessionFromCookie(req, 'student_session');
+  if (!session || session.type !== 'student') {
+    return res.status(401).json({ message: 'Student session required.' });
+  }
+
+  req.student = session;
+  next();
 }
 
 function connectionStringForDatabase(databaseName) {
@@ -28,8 +99,27 @@ const pool = new Pool({
   ssl
 });
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+function normalizeStatus(status) {
+  const value = String(status || 'draft').toLowerCase();
+  return ['draft', 'published', 'closed'].includes(value) ? value : 'draft';
+}
+
+function parseOptionalTimestamp(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function buildInviteEmailContent({ recipient, examName, appUrl }) {
+  const baseUrl = appUrl || process.env.APP_URL || 'http://localhost:3000';
+  return {
+    subject: `You’re invited to ${examName}`,
+    text: `Hello,\n\n${recipient} has been invited to join the exam \"${examName}\" on ExamHub.\nOpen ${baseUrl} to continue.\n`
+  };
+}
 
 async function initializeDatabase() {
   const adminPool = new Pool({
@@ -56,7 +146,11 @@ async function initializeDatabase() {
       examiner_id UUID REFERENCES examiners (id) ON DELETE SET NULL,
       name STRING NOT NULL UNIQUE,
       examiner_name STRING NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      status STRING NOT NULL DEFAULT 'draft',
+      start_at TIMESTAMPTZ,
+      end_at TIMESTAMPTZ,
+      passing_score INT
     )
   `);
 
@@ -93,10 +187,29 @@ async function initializeDatabase() {
     )
   `);
 
-  await pool.query('ALTER TABLE exams ADD COLUMN IF NOT EXISTS examiner_id UUID REFERENCES examiners (id) ON DELETE SET NULL');
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS exam_results (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      exam_id UUID NOT NULL REFERENCES exams (id) ON DELETE CASCADE,
+      student_id UUID NOT NULL REFERENCES exam_students (id) ON DELETE CASCADE,
+      status STRING NOT NULL DEFAULT 'pending',
+      score INT,
+      max_score INT,
+      feedback STRING,
+      submitted_at TIMESTAMPTZ,
+      graded_at TIMESTAMPTZ,
+      UNIQUE (exam_id, student_id)
+    )
+  `);
+
+  await pool.query('ALTER TABLE exams ADD COLUMN IF NOT EXISTS status STRING NOT NULL DEFAULT \"draft\"');
+  await pool.query('ALTER TABLE exams ADD COLUMN IF NOT EXISTS start_at TIMESTAMPTZ');
+  await pool.query('ALTER TABLE exams ADD COLUMN IF NOT EXISTS end_at TIMESTAMPTZ');
+  await pool.query('ALTER TABLE exams ADD COLUMN IF NOT EXISTS passing_score INT');
   await pool.query('CREATE INDEX IF NOT EXISTS exam_students_exam_id_idx ON exam_students (exam_id)');
   await pool.query('CREATE INDEX IF NOT EXISTS exam_questions_exam_id_idx ON exam_questions (exam_id)');
   await pool.query('CREATE INDEX IF NOT EXISTS student_answers_student_id_idx ON student_answers (student_id)');
+  await pool.query('CREATE INDEX IF NOT EXISTS exam_results_exam_id_idx ON exam_results (exam_id)');
 }
 
 app.get('/api/health', async (req, res) => {
@@ -109,7 +222,18 @@ app.get('/api/health', async (req, res) => {
 });
 
 app.post('/api/exams', async (req, res) => {
-  const { examName, examinerName, examinerUsername, examinerPassword, students, questions } = req.body;
+  const {
+    examName,
+    examinerName,
+    examinerUsername,
+    examinerPassword,
+    students,
+    questions,
+    examStatus,
+    startAt,
+    endAt,
+    passingScore
+  } = req.body;
 
   if (!examName || !examinerName || !examinerUsername || !examinerPassword || !Array.isArray(students) || students.length === 0) {
     return res.status(400).json({ message: 'Exam name, examiner account, and at least one student are required.' });
@@ -142,9 +266,16 @@ app.post('/api/exams', async (req, res) => {
     );
     const examiner = examinerResult.rows[0];
 
+    const normalizedStatus = normalizeStatus(examStatus);
+    const startAtValue = parseOptionalTimestamp(startAt);
+    const endAtValue = parseOptionalTimestamp(endAt);
+    const passingScoreValue = passingScore === '' || passingScore === null || passingScore === undefined
+      ? null
+      : Number(passingScore);
+
     const examResult = await client.query(
-      'INSERT INTO exams (name, examiner_name, examiner_id) VALUES ($1, $2, $3) RETURNING id, name, examiner_name, created_at',
-      [examName.trim(), examinerName.trim(), examiner.id]
+      'INSERT INTO exams (name, examiner_name, examiner_id, status, start_at, end_at, passing_score) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, name, examiner_name, created_at, status, start_at, end_at, passing_score',
+      [examName.trim(), examinerName.trim(), examiner.id, normalizedStatus, startAtValue, endAtValue, passingScoreValue]
     );
 
     const exam = examResult.rows[0];
@@ -202,6 +333,13 @@ app.post('/api/examiner-login', async (req, res) => {
       return res.status(401).json({ message: 'Invalid examiner username or password.' });
     }
 
+    setSessionCookie(res, 'examiner_session', {
+      type: 'examiner',
+      examinerId: examiner.id,
+      examinerName: examiner.full_name,
+      username: examiner.username
+    });
+
     res.json({ examinerId: examiner.id, examinerName: examiner.full_name, username: examiner.username });
   } catch (error) {
     console.error('Examiner login error:', error);
@@ -209,19 +347,81 @@ app.post('/api/examiner-login', async (req, res) => {
   }
 });
 
-app.get('/api/examiners/:examinerId/exams', async (req, res) => {
+app.post('/api/examiner-logout', (req, res) => {
+  clearSessionCookie(res, 'examiner_session');
+  res.json({ message: 'Logged out.' });
+});
+
+app.post('/api/examiner-password-reset', async (req, res) => {
+  const { username, recoveryName, email, newPassword } = req.body;
+  const recoveryValue = String(recoveryName || email || '').trim();
+
+  if (!username || !recoveryValue || !newPassword) {
+    return res.status(400).json({ message: 'Username, recovery name, and a new password are required.' });
+  }
+
+  try {
+    const result = await pool.query('SELECT id FROM examiners WHERE username = $1 AND full_name = $2', [username.trim(), recoveryValue]);
+    const examiner = result.rows[0];
+    if (!examiner) {
+      return res.status(404).json({ message: 'No matching examiner account found.' });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await pool.query('UPDATE examiners SET password_hash = $1 WHERE id = $2', [passwordHash, examiner.id]);
+    res.json({ message: 'Password updated successfully.' });
+  } catch (error) {
+    console.error('Examiner reset error:', error);
+    res.status(500).json({ message: 'Could not reset password.' });
+  }
+});
+
+app.post('/api/examiner-invite', requireExaminer, async (req, res) => {
+  const { email, examId } = req.body;
+  if (!email || !examId) {
+    return res.status(400).json({ message: 'Email and exam are required.' });
+  }
+
+  try {
+    const examResult = await pool.query('SELECT id FROM exams WHERE id = $1 AND examiner_id = $2', [examId, req.examiner.examinerId]);
+    if (!examResult.rows[0]) {
+      return res.status(404).json({ message: 'Exam not found.' });
+    }
+
+    const recipient = String(email).trim();
+    const examNameResult = await pool.query('SELECT name FROM exams WHERE id = $1', [examId]);
+    const examName = examNameResult.rows[0]?.name || 'your exam';
+    const inviteEmail = buildInviteEmailContent({ recipient, examName, appUrl: process.env.APP_URL });
+
+    await pool.query(
+      'INSERT INTO exam_invites (exam_id, email, status) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+      [examId, recipient, 'sent']
+    );
+
+    res.json({ message: `Invitation sent to ${recipient}.`, preview: inviteEmail });
+  } catch (error) {
+    console.error('Invite error:', error);
+    res.status(500).json({ message: 'Could not send invitation.' });
+  }
+});
+
+app.get('/api/examiner-session', requireExaminer, (req, res) => {
+  res.json({ examinerId: req.examiner.examinerId, examinerName: req.examiner.examinerName, username: req.examiner.username });
+});
+
+app.get('/api/examiners/me/exams', requireExaminer, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT e.id, e.name, e.created_at,
+      `SELECT e.id, e.name, e.created_at, e.status, e.start_at, e.end_at,
         count(DISTINCT s.id) AS student_count,
         count(DISTINCT q.id) AS question_count
        FROM exams e
        LEFT JOIN exam_students s ON s.exam_id = e.id
        LEFT JOIN exam_questions q ON q.exam_id = e.id
        WHERE e.examiner_id = $1
-       GROUP BY e.id, e.name, e.created_at
+       GROUP BY e.id, e.name, e.created_at, e.status, e.start_at, e.end_at
        ORDER BY e.created_at DESC`,
-      [req.params.examinerId]
+      [req.examiner.examinerId]
     );
 
     res.json(result.rows);
@@ -231,17 +431,11 @@ app.get('/api/examiners/:examinerId/exams', async (req, res) => {
   }
 });
 
-app.get('/api/exams/:examId/admin', async (req, res) => {
-  const examinerId = String(req.query.examinerId || '').trim();
-
-  if (!examinerId) {
-    return res.status(400).json({ message: 'Examiner is required.' });
-  }
-
+app.get('/api/exams/:examId/admin', requireExaminer, async (req, res) => {
   try {
     const examResult = await pool.query(
-      'SELECT id, name, examiner_name FROM exams WHERE id = $1 AND examiner_id = $2',
-      [req.params.examId, examinerId]
+      'SELECT id, name, examiner_name, status, start_at, end_at, passing_score FROM exams WHERE id = $1 AND examiner_id = $2',
+      [req.params.examId, req.examiner.examinerId]
     );
     const exam = examResult.rows[0];
 
@@ -264,24 +458,33 @@ app.get('/api/exams/:examId/admin', async (req, res) => {
       [req.params.examId]
     );
 
-    res.json({ exam, questions: questionsResult.rows, answers: answersResult.rows });
+    const resultsResult = await pool.query(
+      `SELECT s.id AS student_id, s.full_name, s.username, r.id AS result_id, r.status AS result_status, r.score, r.max_score, r.feedback, r.submitted_at, r.graded_at
+       FROM exam_students s
+       LEFT JOIN exam_results r ON r.student_id = s.id AND r.exam_id = $1
+       WHERE s.exam_id = $1
+       ORDER BY s.full_name, s.username`,
+      [req.params.examId]
+    );
+
+    res.json({ exam, questions: questionsResult.rows, answers: answersResult.rows, results: resultsResult.rows });
   } catch (error) {
     console.error('Exam admin error:', error);
     res.status(500).json({ message: 'Could not load exam admin page.' });
   }
 });
 
-app.post('/api/exams/:examId/questions', async (req, res) => {
-  const { examinerId, questionText } = req.body;
+app.post('/api/exams/:examId/questions', requireExaminer, async (req, res) => {
+  const { questionText } = req.body;
 
-  if (!examinerId || !questionText) {
-    return res.status(400).json({ message: 'Examiner and question text are required.' });
+  if (!questionText) {
+    return res.status(400).json({ message: 'Question text is required.' });
   }
 
   try {
     const examResult = await pool.query(
       'SELECT id FROM exams WHERE id = $1 AND examiner_id = $2',
-      [req.params.examId, examinerId]
+      [req.params.examId, req.examiner.examinerId]
     );
 
     if (!examResult.rows[0]) {
@@ -304,8 +507,40 @@ app.post('/api/exams/:examId/questions', async (req, res) => {
   }
 });
 
+app.put('/api/exams/:examId/results/:studentId', requireExaminer, async (req, res) => {
+  const { score, status, feedback } = req.body;
+
+  try {
+    const examResult = await pool.query(
+      'SELECT id FROM exams WHERE id = $1 AND examiner_id = $2',
+      [req.params.examId, req.examiner.examinerId]
+    );
+
+    if (!examResult.rows[0]) {
+      return res.status(404).json({ message: 'Exam not found for this examiner.' });
+    }
+
+    const normalizedStatus = normalizeStatus(status);
+    const parsedScore = score === '' || score === null || score === undefined ? null : Number(score);
+    const result = await pool.query(
+      `INSERT INTO exam_results (exam_id, student_id, status, score, max_score, feedback, submitted_at, graded_at)
+       VALUES ($1, $2, $3, $4, $5, $6, now(), now())
+       ON CONFLICT (exam_id, student_id)
+       DO UPDATE SET status = excluded.status, score = excluded.score, max_score = excluded.max_score, feedback = excluded.feedback, graded_at = now()
+       RETURNING id, status, score, max_score, feedback, submitted_at, graded_at`,
+      [req.params.examId, req.params.studentId, normalizedStatus, parsedScore, null, String(feedback || '').trim() || null]
+    );
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Update result error:', error);
+    res.status(500).json({ message: 'Could not update student result.' });
+  }
+});
+
 app.get('/api/exams/search', async (req, res) => {
   const query = String(req.query.q || '').trim();
+  const status = normalizeStatus(req.query.status);
 
   if (!query) {
     return res.json([]);
@@ -313,12 +548,13 @@ app.get('/api/exams/search', async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT id, name, examiner_name
+      `SELECT id, name, examiner_name, status
        FROM exams
        WHERE lower(name) LIKE lower($1)
+         AND ($2 = 'all' OR status = $2)
        ORDER BY created_at DESC
        LIMIT 10`,
-      [`%${query}%`]
+      [`%${query}%`, status === 'draft' || status === 'published' || status === 'closed' ? status : 'all']
     );
 
     res.json(result.rows);
@@ -336,7 +572,7 @@ app.post('/api/student-login', async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT s.id, s.full_name, s.password_hash, e.name AS exam_name
+      `SELECT s.id, s.full_name, s.password_hash, e.name AS exam_name, e.status AS exam_status, e.start_at, e.end_at
        FROM exam_students s
        JOIN exams e ON e.id = s.exam_id
        WHERE s.exam_id = $1 AND s.username = $2`,
@@ -349,10 +585,27 @@ app.post('/api/student-login', async (req, res) => {
       return res.status(401).json({ message: 'Invalid username or password for this exam.' });
     }
 
+    const now = new Date();
+    const startAt = student.start_at ? new Date(student.start_at) : null;
+    const endAt = student.end_at ? new Date(student.end_at) : null;
+    const examOpen = student.exam_status === 'published' && (!startAt || startAt <= now) && (!endAt || endAt >= now);
+
+    if (!examOpen) {
+      return res.status(403).json({ message: 'This exam is not open for submissions right now.' });
+    }
+
     const questionsResult = await pool.query(
       'SELECT id, question_text, question_order FROM exam_questions WHERE exam_id = $1 ORDER BY question_order, created_at',
       [examId]
     );
+
+    setSessionCookie(res, 'student_session', {
+      type: 'student',
+      studentId: student.id,
+      studentName: student.full_name,
+      examId,
+      examName: student.exam_name
+    });
 
     res.json({
       studentId: student.id,
@@ -365,8 +618,18 @@ app.post('/api/student-login', async (req, res) => {
   }
 });
 
-app.post('/api/student-answers', async (req, res) => {
-  const { studentId, answers } = req.body;
+app.post('/api/student-logout', (req, res) => {
+  clearSessionCookie(res, 'student_session');
+  res.json({ message: 'Logged out.' });
+});
+
+app.get('/api/student-session', requireStudent, (req, res) => {
+  res.json({ studentId: req.student.studentId, studentName: req.student.studentName, examId: req.student.examId, examName: req.student.examName });
+});
+
+app.post('/api/student-answers', requireStudent, async (req, res) => {
+  const { answers } = req.body;
+  const studentId = req.body.studentId || req.student.studentId;
 
   if (!studentId || !Array.isArray(answers) || answers.length === 0) {
     return res.status(400).json({ message: 'Student and answers are required.' });
@@ -394,6 +657,16 @@ app.post('/api/student-answers', async (req, res) => {
       );
     }
 
+    await client.query(
+      `INSERT INTO exam_results (exam_id, student_id, status, score, max_score, feedback, submitted_at, graded_at)
+       SELECT s.exam_id, s.id, 'submitted', NULL, NULL, NULL, now(), NULL
+       FROM exam_students s
+       WHERE s.id = $1
+       ON CONFLICT (exam_id, student_id)
+       DO UPDATE SET status = 'submitted', submitted_at = now(), graded_at = NULL`,
+      [studentId]
+    );
+
     await client.query('COMMIT');
     res.json({ message: 'Answers submitted successfully.' });
   } catch (error) {
@@ -405,13 +678,61 @@ app.post('/api/student-answers', async (req, res) => {
   }
 });
 
-initializeDatabase()
-  .then(() => {
-    app.listen(port, () => {
-      console.log(`Exam portal running at http://localhost:${port}`);
+app.post('/api/student-password-reset', async (req, res) => {
+  const { username, examId, newPassword } = req.body;
+  if (!username || !examId || !newPassword) {
+    return res.status(400).json({ message: 'Username, exam, and a new password are required.' });
+  }
+
+  try {
+    const result = await pool.query('SELECT id FROM exam_students WHERE exam_id = $1 AND username = $2', [examId, username.trim()]);
+    const student = result.rows[0];
+    if (!student) {
+      return res.status(404).json({ message: 'No matching student account found.' });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await pool.query('UPDATE exam_students SET password_hash = $1 WHERE id = $2', [passwordHash, student.id]);
+    res.json({ message: 'Password updated successfully.' });
+  } catch (error) {
+    console.error('Student reset error:', error);
+    res.status(500).json({ message: 'Could not reset password.' });
+  }
+});
+
+app.get('/api/students/me/history', requireStudent, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT e.id AS exam_id, e.name AS exam_name, e.status AS exam_status, r.status AS result_status, r.score, r.max_score, r.submitted_at, r.graded_at
+       FROM exam_results r
+       JOIN exam_students s ON s.id = r.student_id
+       JOIN exams e ON e.id = s.exam_id
+       WHERE r.student_id = $1
+       ORDER BY r.submitted_at DESC, e.created_at DESC`,
+      [req.student.studentId]
+    );
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Student history error:', error);
+    res.status(500).json({ message: 'Could not load student history.' });
+  }
+});
+
+if (require.main === module) {
+  initializeDatabase()
+    .then(() => {
+      app.listen(port, () => {
+        console.log(`Exam portal running at http://localhost:${port}`);
+      });
+    })
+    .catch((error) => {
+      console.error('Database initialization failed:', error);
+      process.exit(1);
     });
-  })
-  .catch((error) => {
-    console.error('Database initialization failed:', error);
-    process.exit(1);
-  });
+}
+
+module.exports = {
+  app,
+  buildInviteEmailContent
+};

@@ -44,12 +44,37 @@
               Examiner password
               <input name="examinerPassword" type="password" autocomplete="new-password" required>
             </label>
+            <label>
+              Exam status
+              <select name="examStatus">
+                <option value="draft">Draft</option>
+                <option value="published">Published</option>
+                <option value="closed">Closed</option>
+              </select>
+            </label>
+            <label>
+              Passing score
+              <input name="passingScore" type="number" min="0" placeholder="60">
+            </label>
+            <label>
+              Start time
+              <input name="examStart" type="datetime-local">
+            </label>
+            <label>
+              End time
+              <input name="examEnd" type="datetime-local">
+            </label>
           </div>
 
           <div class="list-heading">
             <h3>Students</h3>
-            <button type="button" id="add-student">Add student</button>
+            <div class="inline-actions">
+              <input type="file" id="import-students-file" accept=".csv">
+              <button type="button" id="import-students-button">Import CSV</button>
+              <button type="button" id="add-student">Add student</button>
+            </div>
           </div>
+          <p class="status" id="import-status"></p>
           <div id="students-list"></div>
 
           <div class="list-heading">
@@ -78,9 +103,50 @@
             Password
             <input id="examiner-login-password" type="password" autocomplete="current-password" required>
           </label>
-          <button class="primary" type="submit">Log in</button>
+          <div class="inline-actions">
+            <button class="primary" type="submit">Log in</button>
+            <button type="button" id="examiner-logout">Log out</button>
+          </div>
         </form>
         <p class="status" id="admin-status"></p>
+
+        <form id="examiner-password-reset-form" class="stack panel-inner">
+          <div class="grid-3">
+            <label>
+              Username
+              <input id="examiner-reset-username" autocomplete="username" required>
+            </label>
+            <label>
+              Recovery name
+              <input id="examiner-reset-name" autocomplete="name" required>
+            </label>
+            <label>
+              New password
+              <input id="examiner-reset-password" type="password" autocomplete="new-password" required>
+            </label>
+          </div>
+          <div class="inline-actions">
+            <button class="primary" type="submit">Reset password</button>
+          </div>
+          <p class="status" id="examiner-reset-status"></p>
+        </form>
+
+        <form id="examiner-invite-form" class="stack panel-inner">
+          <div class="grid-3">
+            <label>
+              Email
+              <input id="examiner-invite-email" type="email" autocomplete="email" required>
+            </label>
+            <label>
+              Exam
+              <select id="examiner-invite-exam" required></select>
+            </label>
+            <div class="inline-actions">
+              <button type="submit">Send invite</button>
+            </div>
+          </div>
+          <p class="status" id="examiner-invite-status"></p>
+        </form>
 
         <div id="admin-dashboard" class="hidden">
           <div class="admin-layout">
@@ -90,6 +156,7 @@
             </aside>
             <section class="admin-detail">
               <div id="admin-exam-title" class="selected-exam">Select an exam</div>
+              <div id="admin-exam-meta" class="meta-card"></div>
               <form id="add-question-form" class="add-question-form hidden">
                 <label>
                   New question
@@ -97,8 +164,13 @@
                 </label>
                 <button type="submit">Add question</button>
               </form>
+              <div class="inline-actions">
+                <button type="button" id="export-results-button">Export results CSV</button>
+              </div>
               <h3>Questions</h3>
               <div id="admin-questions" class="stack"></div>
+              <h3>Results and grading</h3>
+              <div id="admin-results" class="stack"></div>
               <h3>Student answers</h3>
               <div id="admin-answers" class="stack"></div>
             </section>
@@ -114,6 +186,11 @@
 
         <form id="search-form" class="search-row">
           <input id="exam-search" placeholder="Search exam name" required>
+          <select id="exam-status-filter">
+            <option value="all">All statuses</option>
+            <option value="published">Published</option>
+            <option value="closed">Closed</option>
+          </select>
           <button type="submit">Search</button>
         </form>
 
@@ -134,9 +211,35 @@
             </label>
           </div>
 
-          <button class="primary" type="submit">Start exam</button>
+          <div class="inline-actions">
+            <button class="primary" type="submit">Start exam</button>
+            <button type="button" id="student-logout">Log out</button>
+          </div>
           <p class="status" id="login-status"></p>
         </form>
+
+        <form id="student-password-reset-form" class="stack panel-inner hidden">
+          <div class="grid-3">
+            <label>
+              Username
+              <input id="student-reset-username" autocomplete="username" required>
+            </label>
+            <label>
+              Exam ID
+              <input id="student-reset-exam-id" required>
+            </label>
+            <label>
+              New password
+              <input id="student-reset-password" type="password" autocomplete="new-password" required>
+            </label>
+          </div>
+          <div class="inline-actions">
+            <button type="submit">Reset password</button>
+          </div>
+          <p class="status" id="student-reset-status"></p>
+        </form>
+
+        <div id="student-history" class="stack hidden"></div>
 
         <form id="answer-form" class="hidden">
           <div id="student-exam-title" class="selected-exam"></div>

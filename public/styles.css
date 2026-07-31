@@ -99,7 +99,8 @@ label {
 }
 
 input,
-textarea {
+textarea,
+select {
   width: 100%;
   min-height: 44px;
   border: 1px solid var(--line);
@@ -116,7 +117,8 @@ textarea {
 }
 
 input:focus,
-textarea:focus {
+textarea:focus,
+select:focus {
   border-color: var(--accent);
   outline: 3px solid rgba(15, 118, 110, 0.16);
 }
@@ -175,16 +177,23 @@ button:hover {
 }
 
 .list-heading,
-.search-row {
+.search-row,
+.inline-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
+.inline-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
 .student-row,
 .question-row,
-.item {
+.item,
+.meta-card {
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -240,6 +249,13 @@ button:hover {
 .item p {
   margin: 8px 0;
   color: var(--ink);
+}
+
+.panel-inner {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f9fbfc;
 }
 
 .status {
