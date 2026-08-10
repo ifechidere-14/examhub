@@ -327,8 +327,28 @@ async function restoreExaminerSession() {
 
 async function restoreStudentSession() {
   try {
-    currentStudent = await requestJson('/api/student-session');
+    const session = await requestJson('/api/student-session');
+    const data = await requestJson('/api/students/me/exam');
+    currentStudent = { ...session, ...data };
+
     studentExamTitle.textContent = `${currentStudent.examName} - ${currentStudent.studentName}`;
+    answerQuestions.innerHTML = '';
+
+    if (!currentStudent.questions.length) {
+      answerQuestions.textContent = 'This exam has no questions yet.';
+    } else {
+      currentStudent.questions.forEach((question) => {
+        const label = document.createElement('label');
+        label.textContent = `${question.question_order}. ${question.question_text}`;
+        const textarea = document.createElement('textarea');
+        textarea.dataset.questionId = question.id;
+        textarea.required = true;
+        label.appendChild(textarea);
+        answerQuestions.appendChild(label);
+      });
+    }
+
+    startStudentTimer(currentStudent.durationMinutes);
     await loadStudentHistory(currentStudent.studentId);
     answerForm.classList.remove('hidden');
     setStatus(loginStatus, '');

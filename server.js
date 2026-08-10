@@ -700,6 +700,42 @@ app.get('/api/student-session', requireStudent, (req, res) => {
   res.json({ studentId: req.student.studentId, studentName: req.student.studentName, examId: req.student.examId, examName: req.student.examName });
 });
 
+app.get('/api/students/me/exam', requireStudent, async (req, res) => {
+  try {
+    const examResult = await pool.query(
+      `SELECT e.name AS exam_name, e.duration_minutes, e.randomize_questions, e.room_code
+       FROM exams e
+       WHERE e.id = $1`,
+      [req.student.examId]
+    );
+
+    const exam = examResult.rows[0];
+    if (!exam) {
+      return res.status(404).json({ message: 'Exam not found.' });
+    }
+
+    const questionsResult = await pool.query(
+      'SELECT id, question_text, question_order FROM exam_questions WHERE exam_id = $1 ORDER BY question_order, created_at',
+      [req.student.examId]
+    );
+
+    const orderedQuestions = exam.randomize_questions ? shuffleQuestions(questionsResult.rows) : questionsResult.rows;
+
+    res.json({
+      studentId: req.student.studentId,
+      studentName: req.student.studentName,
+      examId: req.student.examId,
+      examName: exam.exam_name,
+      questions: orderedQuestions,
+      durationMinutes: exam.duration_minutes,
+      roomCode: exam.room_code
+    });
+  } catch (error) {
+    console.error('Student exam restore error:', error);
+    res.status(500).json({ message: 'Could not load exam questions.' });
+  }
+});
+
 app.post('/api/student-answers', requireStudent, async (req, res) => {
   const { answers } = req.body;
   const studentId = req.body.studentId || req.student.studentId;
