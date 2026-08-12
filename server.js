@@ -289,7 +289,7 @@ app.post('/api/exams', async (req, res) => {
     );
     const examiner = examinerResult.rows[0];
 
-    const normalizedStatus = normalizeExamStatus(examStatus);
+    const normalizedStatus = normalizeExamStatus(examStatus || 'published');
     const startAtValue = parseOptionalTimestamp(startAt);
     const endAtValue = parseOptionalTimestamp(endAt);
     const passingScoreValue = passingScore === '' || passingScore === null || passingScore === undefined
@@ -663,10 +663,7 @@ app.post('/api/student-login', async (req, res) => {
       return res.status(401).json({ message: 'Invalid username or password for this exam.' });
     }
 
-    const now = new Date();
-    const startAt = student.start_at ? new Date(student.start_at) : null;
-    const endAt = student.end_at ? new Date(student.end_at) : null;
-    const examOpen = student.exam_status === 'published' && (!startAt || startAt <= now) && (!endAt || endAt >= now);
+    const examOpen = student.exam_status !== 'closed';
 
     if (!examOpen) {
       return res.status(403).json({ message: 'This exam is not open for submissions right now.' });
