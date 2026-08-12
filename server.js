@@ -102,9 +102,17 @@ const pool = new Pool({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-function normalizeStatus(status) {
+function normalizeExamStatus(status, allowAll = false) {
   const value = String(status || 'draft').toLowerCase();
+  if (allowAll && value === 'all') {
+    return 'all';
+  }
   return ['draft', 'published', 'closed'].includes(value) ? value : 'draft';
+}
+
+function normalizeResultStatus(status) {
+  const value = String(status || 'pending').toLowerCase();
+  return ['pending', 'submitted', 'graded'].includes(value) ? value : 'pending';
 }
 
 function parseOptionalTimestamp(value) {
@@ -281,7 +289,7 @@ app.post('/api/exams', async (req, res) => {
     );
     const examiner = examinerResult.rows[0];
 
-    const normalizedStatus = normalizeStatus(examStatus);
+    const normalizedStatus = normalizeExamStatus(examStatus);
     const startAtValue = parseOptionalTimestamp(startAt);
     const endAtValue = parseOptionalTimestamp(endAt);
     const passingScoreValue = passingScore === '' || passingScore === null || passingScore === undefined
@@ -590,7 +598,7 @@ app.put('/api/exams/:examId/results/:studentId', requireExaminer, async (req, re
       return res.status(404).json({ message: 'Exam not found for this examiner.' });
     }
 
-    const normalizedStatus = normalizeStatus(status);
+    const normalizedStatus = normalizeResultStatus(status);
     const parsedScore = score === '' || score === null || score === undefined ? null : Number(score);
     const result = await pool.query(
       `INSERT INTO exam_results (exam_id, student_id, status, score, max_score, feedback, submitted_at, graded_at)
@@ -610,7 +618,7 @@ app.put('/api/exams/:examId/results/:studentId', requireExaminer, async (req, re
 
 app.get('/api/exams/search', async (req, res) => {
   const query = String(req.query.q || '').trim();
-  const status = normalizeStatus(req.query.status);
+  const status = normalizeExamStatus(req.query.status, true);
 
   if (!query) {
     return res.json([]);
