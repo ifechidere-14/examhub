@@ -316,15 +316,27 @@ app.post('/api/exams', async (req, res) => {
       );
     }
 
-    const cleanQuestions = Array.isArray(questions)
-      ? questions.map((question) => String(question.questionText || '').trim()).filter(Boolean)
-      : [];
+    const cleanQuestions = Array.isArray(questions) ? questions : [];
 
-    for (const [index, questionText] of cleanQuestions.entries()) {
-      await client.query(
-        'INSERT INTO exam_questions (exam_id, question_text, question_order) VALUES ($1, $2, $3)',
-        [exam.id, questionText, index + 1]
+    for (const [index, question] of cleanQuestions.entries()) {
+      const questionText = String(question.questionText || '').trim();
+      if (!questionText) continue;
+      const questionType = String(question.questionType || question.type || 'text');
+      const maxScore = question.maxScore ? Number(question.maxScore) : null;
+      const qResult = await client.query(
+        'INSERT INTO exam_questions (exam_id, question_text, question_order, question_type, max_score) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+        [exam.id, questionText, index + 1, questionType, maxScore]
       );
+      const questionId = qResult.rows[0].id;
+
+      if (questionType === 'mcq' && Array.isArray(question.options)) {
+        for (const [optIndex, opt] of question.options.entries()) {
+          await client.query(
+            'INSERT INTO mcq_options (question_id, option_text, is_correct, option_order) VALUES ($1, $2, $3, $4)',
+            [questionId, String(opt.text || opt.option_text || '').trim(), Boolean(opt.isCorrect || opt.is_correct), opt.order || optIndex + 1]
+          );
+        }
+      }
     }
 
     await client.query('COMMIT');
@@ -553,7 +565,7 @@ app.get('/api/exams/:examId/room', requireExaminer, async (req, res) => {
 });
 
 app.post('/api/exams/:examId/questions', requireExaminer, async (req, res) => {
-  const { questionText } = req.body;
+  const { questionText, questionType, options, maxScore } = req.body;
 
   if (!questionText) {
     return res.status(400).json({ message: 'Question text is required.' });
@@ -574,11 +586,21 @@ app.post('/api/exams/:examId/questions', requireExaminer, async (req, res) => {
       [req.params.examId]
     );
     const result = await pool.query(
-      'INSERT INTO exam_questions (exam_id, question_text, question_order) VALUES ($1, $2, $3) RETURNING id, question_text, question_order',
-      [req.params.examId, questionText.trim(), orderResult.rows[0].next_order]
+      'INSERT INTO exam_questions (exam_id, question_text, question_order, question_type, max_score) VALUES ($1, $2, $3, $4, $5) RETURNING id, question_text, question_order',
+      [req.params.examId, questionText.trim(), orderResult.rows[0].next_order, questionType || 'text', maxScore || null]
     );
 
-    res.status(201).json(result.rows[0]);
+    const inserted = result.rows[0];
+    if (questionType === 'mcq' && Array.isArray(options)) {
+      for (const [i, opt] of options.entries()) {
+        await pool.query(
+          'INSERT INTO mcq_options (question_id, option_text, is_correct, option_order) VALUES ($1, $2, $3, $4)',
+          [inserted.id, String(opt.text || opt.option_text || '').trim(), Boolean(opt.isCorrect || opt.is_correct), i + 1]
+        );
+      }
+    }
+
+    res.status(201).json(inserted);
   } catch (error) {
     console.error('Add question error:', error);
     res.status(500).json({ message: 'Could not add question.' });
@@ -670,10 +692,24 @@ app.post('/api/student-login', async (req, res) => {
     }
 
     const questionsResult = await pool.query(
-      'SELECT id, question_text, question_order FROM exam_questions WHERE exam_id = $1 ORDER BY question_order, created_at',
+      'SELECT id, question_text, question_order, question_type, max_score FROM exam_questions WHERE exam_id = $1 ORDER BY question_order, created_at',
       [examId]
     );
-    const orderedQuestions = student.randomize_questions ? shuffleQuestions(questionsResult.rows) : questionsResult.rows;
+    let orderedQuestions = questionsResult.rows;
+    if (student.randomize_questions) orderedQuestions = shuffleQuestions(orderedQuestions);
+
+    // load mcq options
+    const qIds = orderedQuestions.map((q) => q.id);
+    let optionsMap = {};
+    if (qIds.length) {
+      const optsRes = await pool.query('SELECT id, question_id, option_text, is_correct, option_order FROM mcq_options WHERE question_id = ANY($1::uuid[]) ORDER BY option_order', [qIds]);
+      optsRes.rows.forEach((opt) => {
+        optionsMap[opt.question_id] = optionsMap[opt.question_id] || [];
+        optionsMap[opt.question_id].push(opt);
+      });
+    }
+
+    orderedQuestions = orderedQuestions.map((q) => ({ ...q, options: optionsMap[q.id] || [] }));
 
     setSessionCookie(res, 'student_session', {
       type: 'student',
@@ -720,11 +756,23 @@ app.get('/api/students/me/exam', requireStudent, async (req, res) => {
     }
 
     const questionsResult = await pool.query(
-      'SELECT id, question_text, question_order FROM exam_questions WHERE exam_id = $1 ORDER BY question_order, created_at',
+      'SELECT id, question_text, question_order, question_type, max_score FROM exam_questions WHERE exam_id = $1 ORDER BY question_order, created_at',
       [req.student.examId]
     );
+    let orderedQuestions = questionsResult.rows;
+    if (exam.randomize_questions) orderedQuestions = shuffleQuestions(orderedQuestions);
 
-    const orderedQuestions = exam.randomize_questions ? shuffleQuestions(questionsResult.rows) : questionsResult.rows;
+    const qIds = orderedQuestions.map((q) => q.id);
+    let optionsMap = {};
+    if (qIds.length) {
+      const optsRes = await pool.query('SELECT id, question_id, option_text, is_correct, option_order FROM mcq_options WHERE question_id = ANY($1::uuid[]) ORDER BY option_order', [qIds]);
+      optsRes.rows.forEach((opt) => {
+        optionsMap[opt.question_id] = optionsMap[opt.question_id] || [];
+        optionsMap[opt.question_id].push(opt);
+      });
+    }
+
+    orderedQuestions = orderedQuestions.map((q) => ({ ...q, options: optionsMap[q.id] || [] }));
 
     res.json({
       studentId: req.student.studentId,
@@ -781,6 +829,35 @@ app.post('/api/student-answers', requireStudent, async (req, res) => {
       [studentId]
     );
 
+    // Attempt auto-grading for MCQ answers
+    try {
+      const mcqAnswers = answers.filter(a => a.questionType === 'mcq' || a.questionType === 'mcq_single' || a.questionType === 'mcq_multiple');
+      if (mcqAnswers.length) {
+        for (const ans of mcqAnswers) {
+          // ans.answerText is expected to be option id or array of option ids
+          const answerOptionIds = Array.isArray(ans.answerText) ? ans.answerText : [ans.answerText];
+          const optsRes = await client.query('SELECT id, is_correct FROM mcq_options WHERE question_id = $1', [ans.questionId]);
+          const correctIds = optsRes.rows.filter(r => r.is_correct).map(r => String(r.id));
+          const selected = answerOptionIds.map(String);
+          const isCorrect = selected.length === correctIds.length && selected.every(id => correctIds.includes(id));
+
+          const score = isCorrect ? 1 : 0;
+          // upsert result row per question: simplified scoring accumulation can be done later
+          await client.query(
+            `INSERT INTO exam_results (exam_id, student_id, status, score, max_score, feedback, submitted_at)
+             SELECT s.exam_id, s.id, 'submitted', $1, $2, $3, now()
+             FROM exam_students s
+             WHERE s.id = $4
+             ON CONFLICT (exam_id, student_id)
+             DO UPDATE SET score = COALESCE(exam_results.score,0) + $1, max_score = COALESCE(exam_results.max_score,0) + $2`,
+            [score, 1, isCorrect ? 'Auto-graded: correct' : 'Auto-graded: incorrect', studentId]
+          );
+        }
+      }
+    } catch (err) {
+      console.error('Auto-grading error:', err);
+    }
+
     await client.query('COMMIT');
     res.json({ message: 'Answers submitted successfully.' });
   } catch (error) {
@@ -789,6 +866,58 @@ app.post('/api/student-answers', requireStudent, async (req, res) => {
     res.status(500).json({ message: 'Could not submit answers.' });
   } finally {
     client.release();
+  }
+});
+
+// Draft save/load endpoints for autosave
+app.post('/api/student-draft', requireStudent, async (req, res) => {
+  const { studentId, answers } = req.body;
+  if (!studentId || !Array.isArray(answers)) {
+    return res.status(400).json({ message: 'Student ID and answers are required.' });
+  }
+
+  try {
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS student_drafts (
+        student_id UUID PRIMARY KEY,
+        draft JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`
+    );
+
+    await pool.query(
+      `INSERT INTO student_drafts (student_id, draft, updated_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (student_id) DO UPDATE SET draft = excluded.draft, updated_at = now()`,
+      [studentId, JSON.stringify({ answers })]
+    );
+
+    res.json({ message: 'Draft saved.' });
+  } catch (error) {
+    console.error('Save draft error:', error);
+    res.status(500).json({ message: 'Could not save draft.' });
+  }
+});
+
+app.get('/api/student-draft', requireStudent, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT draft, updated_at FROM student_drafts WHERE student_id = $1', [req.student.studentId]);
+    if (!result.rows[0]) return res.json(null);
+    res.json({ draft: result.rows[0].draft, updatedAt: result.rows[0].updated_at });
+  } catch (error) {
+    console.error('Load draft error:', error);
+    res.status(500).json({ message: 'Could not load draft.' });
+  }
+});
+
+app.delete('/api/student-draft', requireStudent, async (req, res) => {
+  const { studentId } = req.body || {};
+  try {
+    await pool.query('DELETE FROM student_drafts WHERE student_id = $1', [studentId || req.student.studentId]);
+    res.json({ message: 'Draft deleted.' });
+  } catch (error) {
+    console.error('Delete draft error:', error);
+    res.status(500).json({ message: 'Could not delete draft.' });
   }
 });
 

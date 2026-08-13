@@ -57,6 +57,8 @@ let currentStudent = null;
 let currentStudentTimer = null;
 let currentLanguage = 'en';
 let darkModeEnabled = false;
+let autosaveTimer = null;
+let lastAutosaveAt = null;
 
 function setStatus(element, message, isError = false) {
   element.textContent = message;
@@ -156,6 +158,30 @@ function startStudentTimer(durationMinutes) {
   }, 1000);
 }
 
+async function saveStudentDraft() {
+  if (!currentStudent) return;
+  const answers = [...answerQuestions.querySelectorAll('textarea')].map((textarea) => ({
+    questionId: textarea.dataset.questionId,
+    answerText: textarea.value
+  }));
+
+  try {
+    await requestJson('/api/student-draft', {
+      method: 'POST',
+      body: JSON.stringify({ studentId: currentStudent.studentId, answers })
+    });
+    lastAutosaveAt = new Date();
+    setStatus(answerStatus, `Autosaved at ${lastAutosaveAt.toLocaleTimeString()}`);
+  } catch (err) {
+    setStatus(answerStatus, 'Autosave failed.', true);
+  }
+}
+
+function scheduleAutosave() {
+  if (autosaveTimer) clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(saveStudentDraft, 5000);
+}
+
 function showTabWarning() {
   setStatus(answerStatus, 'Please stay on this tab while taking the exam.', true);
 }
@@ -200,6 +226,36 @@ function addQuestionRow() {
   questionsList.appendChild(createInputRow('question-row', [
     { label: 'Question', className: 'question-text', multiline: true, placeholder: 'Explain photosynthesis.' }
   ]));
+}
+
+// New helper to add MCQ option inputs when creating exam
+function createMcqOptionsEditor(container, options = []) {
+  container.innerHTML = '';
+  options.forEach((opt, i) => {
+    const row = document.createElement('div');
+    row.className = 'mcq-option-row';
+    const label = document.createElement('label');
+    label.textContent = `Option ${i + 1}`;
+    const input = document.createElement('input');
+    input.className = 'mcq-option-text';
+    input.placeholder = 'Option text';
+    input.value = opt.text || opt.option_text || '';
+    const correct = document.createElement('input');
+    correct.type = 'checkbox';
+    correct.className = 'mcq-option-correct';
+    correct.checked = Boolean(opt.isCorrect || opt.is_correct);
+    label.appendChild(input);
+    label.appendChild(correct);
+    row.appendChild(label);
+    container.appendChild(row);
+  });
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.textContent = 'Add option';
+  addBtn.addEventListener('click', () => {
+    createMcqOptionsEditor(container, [...options, {}]);
+  });
+  container.appendChild(addBtn);
 }
 
 function parseCsv(text) {
@@ -338,13 +394,7 @@ async function restoreStudentSession() {
       answerQuestions.textContent = 'This exam has no questions yet.';
     } else {
       currentStudent.questions.forEach((question) => {
-        const label = document.createElement('label');
-        label.textContent = `${question.question_order}. ${question.question_text}`;
-        const textarea = document.createElement('textarea');
-        textarea.dataset.questionId = question.id;
-        textarea.required = true;
-        label.appendChild(textarea);
-        answerQuestions.appendChild(label);
+        answerQuestions.appendChild(renderQuestionInput(question));
       });
     }
 
@@ -356,6 +406,41 @@ async function restoreStudentSession() {
     currentStudent = null;
     answerForm.classList.add('hidden');
   }
+}
+
+function renderQuestionInput(question) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'question-item';
+  const title = document.createElement('div');
+  title.className = 'question-title';
+  title.textContent = `${question.question_order}. ${question.question_text}`;
+  wrapper.appendChild(title);
+
+  if (question.question_type && question.question_type.startsWith('mcq')) {
+    const single = !question.question_type.includes('multiple');
+    const options = question.options || [];
+    const list = document.createElement('div');
+    list.className = 'mcq-options';
+    options.forEach((opt) => {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = single ? 'radio' : 'checkbox';
+      input.name = `q_${question.id}`;
+      input.value = opt.id;
+      input.dataset.questionId = question.id;
+      label.appendChild(input);
+      label.appendChild(document.createTextNode(opt.option_text || opt.optionText || opt.option_text));
+      list.appendChild(label);
+    });
+    wrapper.appendChild(list);
+  } else {
+    const textarea = document.createElement('textarea');
+    textarea.dataset.questionId = question.id;
+    textarea.required = true;
+    wrapper.appendChild(textarea);
+  }
+
+  return wrapper;
 }
 
 function createResultCard(student, result) {
@@ -411,29 +496,50 @@ function createResultCard(student, result) {
       setStatus(adminStatus, error.message, true);
     }
   });
+  item.querySelector('.result-save').addEventListener('click', async () => {
+    try {
+      await requestJson(`/api/exams/${currentAdminExamId}/results/${student.student_id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          examinerId: currentExaminer.examinerId,
+          status: statusSelect.value,
+          score: scoreInput.value,
+          feedback: feedbackInput.value
+        })
+      });
+      setStatus(adminStatus, `Saved grading for ${student.full_name}.`);
+      await loadAdminExam(currentAdminExamId);
+    } catch (error) {
+      setStatus(adminStatus, error.message, true);
+    }
+  });
 
   return item;
 }
 
 async function loadStudentHistory(studentId) {
-  const history = await requestJson('/api/students/me/history');
-  studentHistory.innerHTML = '';
-  studentHistory.classList.remove('hidden');
+  try {
+    const history = await requestJson('/api/students/me/history');
+    studentHistory.innerHTML = '';
+    studentHistory.classList.remove('hidden');
 
-  if (!history.length) {
-    studentHistory.textContent = 'No submissions yet.';
-    return;
+    if (!history.length) {
+      studentHistory.textContent = 'No submissions yet.';
+      return;
+    }
+
+    history.forEach((entry) => {
+      const item = document.createElement('div');
+      item.className = 'item';
+      item.innerHTML = `<strong></strong><p></p><span></span>`;
+      item.querySelector('strong').textContent = entry.exam_name;
+      item.querySelector('p').textContent = `Status: ${entry.result_status || 'pending'}${entry.score !== null && entry.score !== undefined ? ` • Score: ${entry.score}` : ''}`;
+      item.querySelector('span').textContent = entry.submitted_at ? `Submitted ${formatDateTime(entry.submitted_at)}` : 'No submission yet';
+      studentHistory.appendChild(item);
+    });
+  } catch (error) {
+    console.error('Student history load error:', error);
   }
-
-  history.forEach((entry) => {
-    const item = document.createElement('div');
-    item.className = 'item';
-    item.innerHTML = `<strong></strong><p></p><span></span>`;
-    item.querySelector('strong').textContent = entry.exam_name;
-    item.querySelector('p').textContent = `Status: ${entry.result_status || 'pending'}${entry.score !== null && entry.score !== undefined ? ` • Score: ${entry.score}` : ''}`;
-    item.querySelector('span').textContent = entry.submitted_at ? `Submitted ${formatDateTime(entry.submitted_at)}` : 'No submission yet';
-    studentHistory.appendChild(item);
-  });
 }
 
 navButtons.forEach((button) => {
@@ -814,10 +920,20 @@ answerForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   setStatus(answerStatus, 'Submitting answers...');
 
-  const answers = [...answerQuestions.querySelectorAll('textarea')].map((textarea) => ({
-    questionId: textarea.dataset.questionId,
-    answerText: textarea.value
-  }));
+  // collect answers including MCQ selections
+  const answers = [];
+  // textareas
+  [...answerQuestions.querySelectorAll('textarea')].forEach((textarea) => {
+    answers.push({ questionId: textarea.dataset.questionId, answerText: textarea.value });
+  });
+  // mcq inputs
+  [...answerQuestions.querySelectorAll('.mcq-options')].forEach((container) => {
+    const qInputs = container.querySelectorAll('input');
+    if (!qInputs.length) return;
+    const qId = qInputs[0].dataset.questionId;
+    const selected = [...qInputs].filter(i => i.checked).map(i => i.value);
+    answers.push({ questionId: qId, answerText: selected.length === 1 ? selected[0] : selected });
+  });
 
   try {
     const data = await requestJson('/api/student-answers', {
@@ -826,9 +942,16 @@ answerForm.addEventListener('submit', async (event) => {
     });
     await loadStudentHistory(currentStudent.studentId);
     setStatus(answerStatus, data.message);
+    // clear any saved draft on successful submit
+    try { await requestJson('/api/student-draft', { method: 'DELETE', body: JSON.stringify({ studentId: currentStudent.studentId }) }); } catch (e) { /* ignore */ }
   } catch (error) {
     setStatus(answerStatus, error.message, true);
   }
+});
+
+// Hook autosave to answer changes
+answerQuestions.addEventListener('input', () => {
+  scheduleAutosave();
 });
 
 studentLogoutButton.addEventListener('click', async () => {
