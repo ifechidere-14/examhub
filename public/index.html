@@ -188,6 +188,16 @@
                   <textarea id="admin-question-text" required></textarea>
                 </label>
                 <button type="submit">Add question</button>
+                <div class="import-questions">
+                  <label>
+                    Import questions
+                    <input type="file" id="admin-import-questions-file" accept=".pdf,.docx,.doc,.xlsx,.xls">
+                  </label>
+                  <div class="inline-actions">
+                    <button type="button" id="admin-import-questions-button">Import file</button>
+                  </div>
+                  <p class="status" id="admin-import-status"></p>
+                </div>
               </form>
               <div class="inline-actions">
                 <button type="button" id="export-results-button">Export results CSV</button>
