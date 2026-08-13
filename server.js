@@ -99,14 +99,6 @@ const pool = new Pool({
   ssl
 });
 
-// Multer for file uploads
-const multer = require('multer');
-const upload = multer({ dest: path.join(__dirname, 'uploads') });
-const fs = require('fs');
-const pdf = require('pdf-parse');
-const mammoth = require('mammoth');
-const xlsx = require('xlsx');
-
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -615,63 +607,6 @@ app.post('/api/exams/:examId/questions', requireExaminer, async (req, res) => {
   }
 });
 
-// Admin import questions from document
-app.post('/api/admin/import-questions', requireExaminer, upload.single('file'), async (req, res) => {
-  const file = req.file;
-  const examId = req.body.examId;
-  if (!file) return res.status(400).json({ message: 'No file uploaded.' });
-
-  try {
-    const ext = path.extname(file.originalname).toLowerCase();
-    let text = '';
-    if (ext === '.pdf') {
-      const data = fs.readFileSync(file.path);
-      const parsed = await pdf(data);
-      text = parsed.text;
-    } else if (ext === '.docx' || ext === '.doc') {
-      const result = await mammoth.extractRawText({ path: file.path });
-      text = result.value;
-    } else if (ext === '.xlsx' || ext === '.xls') {
-      const workbook = xlsx.readFile(file.path);
-      const sheetName = workbook.SheetNames[0];
-      const sheet = workbook.Sheets[sheetName];
-      text = xlsx.utils.sheet_to_csv(sheet);
-    } else {
-      return res.status(400).json({ message: 'Unsupported file type.' });
-    }
-
-    // Simple heuristic: split by blank lines or numbered lines
-    const candidateQuestions = text.split(/\n\s*\n|\r\n\s*\r\n/).map(s => s.trim()).filter(Boolean);
-
-    let importedCount = 0;
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      const orderResult = await client.query('SELECT COALESCE(MAX(question_order), 0) + 1 AS next_order FROM exam_questions WHERE exam_id = $1', [examId]);
-      let nextOrder = orderResult.rows[0].next_order;
-      for (const qtext of candidateQuestions) {
-        await client.query('INSERT INTO exam_questions (exam_id, question_text, question_order, question_type) VALUES ($1, $2, $3, $4)', [examId, qtext, nextOrder++, 'text']);
-        importedCount += 1;
-      }
-      await client.query('COMMIT');
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
-    }
-
-    // cleanup upload
-    fs.unlinkSync(file.path);
-
-    res.json({ importedCount });
-  } catch (err) {
-    console.error('Import questions error:', err);
-    try { fs.unlinkSync(file.path); } catch (e) {}
-    res.status(500).json({ message: 'Could not import questions.' });
-  }
-});
-
 app.put('/api/exams/:examId/results/:studentId', requireExaminer, async (req, res) => {
   const { score, status, feedback } = req.body;
 
@@ -894,44 +829,30 @@ app.post('/api/student-answers', requireStudent, async (req, res) => {
       [studentId]
     );
 
-    // Attempt auto-grading for MCQ answers (weighted, accumulate max_score)
+    // Attempt auto-grading for MCQ answers
     try {
-      const mcqAnswers = answers.filter(a => a.questionId);
+      const mcqAnswers = answers.filter(a => a.questionType === 'mcq' || a.questionType === 'mcq_single' || a.questionType === 'mcq_multiple');
       if (mcqAnswers.length) {
-        let totalScore = 0;
-        let totalMax = 0;
         for (const ans of mcqAnswers) {
+          // ans.answerText is expected to be option id or array of option ids
+          const answerOptionIds = Array.isArray(ans.answerText) ? ans.answerText : [ans.answerText];
           const optsRes = await client.query('SELECT id, is_correct FROM mcq_options WHERE question_id = $1', [ans.questionId]);
-          if (!optsRes.rows.length) continue; // not MCQ
-
           const correctIds = optsRes.rows.filter(r => r.is_correct).map(r => String(r.id));
-          const answerOptionIds = Array.isArray(ans.answerText) ? ans.answerText.map(String) : [String(ans.answerText)];
+          const selected = answerOptionIds.map(String);
+          const isCorrect = selected.length === correctIds.length && selected.every(id => correctIds.includes(id));
 
-          // For multiple-correct, compute partial credit by intersection size / correct size
-          const intersection = answerOptionIds.filter(id => correctIds.includes(id)).length;
-          const credit = correctIds.length ? (intersection / correctIds.length) : (intersection > 0 ? 1 : 0);
-
-          // allow negative for selecting incorrect in single-choice? simple penalty: zero
-          const score = Math.max(0, credit);
-
-          // max score for the question: use exam_questions.max_score or default 1
-          const qRes = await client.query('SELECT max_score FROM exam_questions WHERE id = $1', [ans.questionId]);
-          const qMax = (qRes.rows[0] && qRes.rows[0].max_score) ? Number(qRes.rows[0].max_score) : 1;
-
-          totalScore += score * qMax;
-          totalMax += qMax;
+          const score = isCorrect ? 1 : 0;
+          // upsert result row per question: simplified scoring accumulation can be done later
+          await client.query(
+            `INSERT INTO exam_results (exam_id, student_id, status, score, max_score, feedback, submitted_at)
+             SELECT s.exam_id, s.id, 'submitted', $1, $2, $3, now()
+             FROM exam_students s
+             WHERE s.id = $4
+             ON CONFLICT (exam_id, student_id)
+             DO UPDATE SET score = COALESCE(exam_results.score,0) + $1, max_score = COALESCE(exam_results.max_score,0) + $2`,
+            [score, 1, isCorrect ? 'Auto-graded: correct' : 'Auto-graded: incorrect', studentId]
+          );
         }
-
-        // Upsert exam_results row with aggregated auto-graded score
-        await client.query(
-          `INSERT INTO exam_results (exam_id, student_id, status, score, max_score, feedback, submitted_at)
-           SELECT s.exam_id, s.id, 'submitted', $1, $2, $3, now()
-           FROM exam_students s
-           WHERE s.id = $4
-           ON CONFLICT (exam_id, student_id)
-           DO UPDATE SET score = $1, max_score = $2, feedback = COALESCE(exam_results.feedback, '') || ' Auto-graded.'`,
-          [Math.round(totalScore), Math.round(totalMax), 'Auto-graded results', studentId]
-        );
       }
     } catch (err) {
       console.error('Auto-grading error:', err);
@@ -939,31 +860,6 @@ app.post('/api/student-answers', requireStudent, async (req, res) => {
 
     await client.query('COMMIT');
     res.json({ message: 'Answers submitted successfully.' });
-    // trigger plagiarism webhooks asynchronously (don't block response)
-    (async () => {
-      try {
-        const webhooksRes = await pool.query("SELECT id, url, events FROM webhooks WHERE $1 = ANY(events)", ['plagiarism']);
-        if (!webhooksRes.rows.length) return;
-        const payload = { examId: req.student.examId, studentId: req.student.studentId, answers };
-        for (const wh of webhooksRes.rows) {
-          try {
-            const resp = await fetch(wh.url, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ event: 'plagiarism', payload })
-            });
-            let report = null;
-            try { report = await resp.json(); } catch (e) { report = { status: resp.status }; }
-            const score = report?.similarity_score ?? report?.score ?? null;
-            await pool.query('INSERT INTO plagiarism_checks (exam_id, student_id, similarity_score, report) VALUES ($1, $2, $3, $4)', [req.student.examId, req.student.studentId, score, report]);
-          } catch (err) {
-            console.error('Webhook call failed', wh.url, err);
-          }
-        }
-      } catch (err) {
-        console.error('Plagiarism webhook processing failed', err);
-      }
-    })();
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Submit answers error:', error);
@@ -1022,44 +918,6 @@ app.delete('/api/student-draft', requireStudent, async (req, res) => {
   } catch (error) {
     console.error('Delete draft error:', error);
     res.status(500).json({ message: 'Could not delete draft.' });
-  }
-});
-
-// Proctoring event capture (generic)
-app.post('/api/proctor/events', requireStudent, async (req, res) => {
-  const { eventType, details } = req.body || {};
-  if (!eventType) return res.status(400).json({ message: 'eventType is required.' });
-
-  try {
-    await pool.query(
-      `INSERT INTO proctor_events (exam_id, student_id, event_type, event_time, details)
-       VALUES ($1, $2, $3, now(), $4)`,
-      [req.student.examId, req.student.studentId, String(eventType).substring(0, 100), details ? JSON.stringify(details) : null]
-    );
-    res.json({ message: 'Proctor event recorded.' });
-  } catch (error) {
-    console.error('Proctor event error:', error);
-    res.status(500).json({ message: 'Could not record proctor event.' });
-  }
-});
-
-// Proctor snapshot upload (webcam image)
-app.post('/api/proctor/events/upload', requireStudent, upload.single('image'), async (req, res) => {
-  const file = req.file;
-  if (!file) return res.status(400).json({ message: 'No image uploaded.' });
-
-  try {
-    // store reference to uploaded file in details
-    const details = { filename: file.filename, originalName: file.originalname, path: file.path };
-    await pool.query(
-      `INSERT INTO proctor_events (exam_id, student_id, event_type, event_time, details)
-       VALUES ($1, $2, $3, now(), $4)`,
-      [req.student.examId, req.student.studentId, 'snapshot', JSON.stringify(details)]
-    );
-    res.json({ message: 'Snapshot recorded.' });
-  } catch (error) {
-    console.error('Snapshot upload error:', error);
-    res.status(500).json({ message: 'Could not save snapshot.' });
   }
 });
 

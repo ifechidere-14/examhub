@@ -23,9 +23,6 @@ const adminExamTitle = document.querySelector('#admin-exam-title');
 const adminExamMeta = document.querySelector('#admin-exam-meta');
 const addQuestionForm = document.querySelector('#add-question-form');
 const adminQuestionText = document.querySelector('#admin-question-text');
-const adminImportFile = document.querySelector('#admin-import-questions-file');
-const adminImportButton = document.querySelector('#admin-import-questions-button');
-const adminImportStatus = document.querySelector('#admin-import-status');
 const adminQuestions = document.querySelector('#admin-questions');
 const adminAnswers = document.querySelector('#admin-answers');
 const adminResults = document.querySelector('#admin-results');
@@ -204,36 +201,6 @@ function createInputRow(className, fields) {
     label.appendChild(input);
     row.appendChild(label);
   });
-
-  // Add per-question type select when creating questions in create-view
-  if (className === 'question-row') {
-    const typeLabel = document.createElement('label');
-    typeLabel.textContent = 'Type';
-    const typeSelect = document.createElement('select');
-    typeSelect.className = 'question-type-select';
-    ['text', 'mcq_single', 'mcq_multiple', 'code', 'file'].forEach((opt) => {
-      const o = document.createElement('option');
-      o.value = opt;
-      o.textContent = opt.replace('_', ' ');
-      typeSelect.appendChild(o);
-    });
-    typeLabel.appendChild(typeSelect);
-    row.appendChild(typeLabel);
-
-    const mcqContainer = document.createElement('div');
-    mcqContainer.className = 'mcq-editor hidden';
-    row.appendChild(mcqContainer);
-
-    typeSelect.addEventListener('change', () => {
-      if (typeSelect.value.startsWith('mcq')) {
-        mcqContainer.classList.remove('hidden');
-        createMcqOptionsEditor(mcqContainer, []);
-      } else {
-        mcqContainer.classList.add('hidden');
-        mcqContainer.innerHTML = '';
-      }
-    });
-  }
 
   const removeButton = document.createElement('button');
   removeButton.type = 'button';
@@ -473,12 +440,6 @@ function renderQuestionInput(question) {
     wrapper.appendChild(textarea);
   }
 
-  // hook input changes for autosave
-  wrapper.querySelectorAll('textarea, input').forEach((el) => {
-    el.addEventListener('input', scheduleAutosave);
-    el.addEventListener('change', scheduleAutosave);
-  });
-
   return wrapper;
 }
 
@@ -502,30 +463,6 @@ function createResultCard(student, result) {
         <textarea class="result-feedback"></textarea>
       </label>
       <button type="button" class="result-save">Save</button>
-
-      // restore saved draft if present
-      try {
-        const draftResp = await requestJson('/api/student-draft');
-        if (draftResp && draftResp.draft && Array.isArray(draftResp.draft.answers)) {
-          draftResp.draft.answers.forEach((ans) => {
-            // find corresponding input
-            const qEl = answerQuestions.querySelector(`[data-question-id="${ans.questionId}"]`);
-            if (!qEl) return;
-            if (Array.isArray(ans.answerText)) {
-              // MCQ selections
-              ans.answerText.forEach((val) => {
-                const input = answerQuestions.querySelector(`.mcq-options input[value="${val}"]`);
-                if (input) input.checked = true;
-              });
-            } else {
-              if (qEl.tagName === 'TEXTAREA') qEl.value = ans.answerText;
-              else {
-                const inp = qEl.querySelector('input'); if (inp) inp.value = ans.answerText;
-              }
-            }
-          });
-        }
-      } catch (e) { /* ignore */ }
     </div>
   `;
 
@@ -622,20 +559,9 @@ examForm.addEventListener('submit', async (event) => {
     username: row.querySelector('.student-username').value,
     password: row.querySelector('.student-password').value
   }));
-  const questions = [...questionsList.querySelectorAll('.question-row')].map((row) => {
-    const type = row.querySelector('.question-type-select') ? row.querySelector('.question-type-select').value : 'text';
-    const q = { questionText: row.querySelector('.question-text').value, questionType: type };
-    const mcqEditor = row.querySelector('.mcq-editor');
-    if (mcqEditor && !mcqEditor.classList.contains('hidden')) {
-      const opts = [...mcqEditor.querySelectorAll('.mcq-option-row')].map((or) => ({
-        text: or.querySelector('.mcq-option-text').value,
-        isCorrect: Boolean(or.querySelector('.mcq-option-correct').checked)
-      })).filter(o => o.text && o.text.length);
-      q.options = opts;
-      q.questionType = q.questionType.startsWith('mcq') ? 'mcq' : q.questionType;
-    }
-    return q;
-  });
+  const questions = [...questionsList.querySelectorAll('.question-row')].map((row) => ({
+    questionText: row.querySelector('.question-text').value
+  }));
 
   try {
     const data = await requestJson('/api/exams', {
@@ -870,32 +796,6 @@ addQuestionForm.addEventListener('submit', async (event) => {
     await loadExaminerExams();
   } catch (error) {
     setStatus(adminStatus, error.message, true);
-  }
-});
-
-adminImportButton.addEventListener('click', async () => {
-  const file = adminImportFile.files[0];
-  if (!file) {
-    setStatus(adminImportStatus, 'Choose a file first.', true);
-    return;
-  }
-
-  const formData = new FormData();
-  formData.append('file', file);
-  formData.append('examId', currentAdminExamId || '');
-
-  try {
-    adminImportButton.disabled = true;
-    adminImportStatus.textContent = 'Uploading...';
-    const resp = await fetch('/api/admin/import-questions', { method: 'POST', body: formData });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.message || 'Import failed');
-    adminImportStatus.textContent = `Imported ${data.importedCount} question(s).`;
-    await loadAdminExam(currentAdminExamId);
-  } catch (err) {
-    adminImportStatus.textContent = err.message;
-  } finally {
-    adminImportButton.disabled = false;
   }
 });
 
