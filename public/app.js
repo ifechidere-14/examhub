@@ -31,6 +31,8 @@ const adminRoom = document.querySelector('#admin-room');
 const exportResultsButton = document.querySelector('#export-results-button');
 const languageSwitch = document.querySelector('#language-switch');
 const themeToggle = document.querySelector('#theme-toggle');
+const downloadApp = document.querySelector('#download-app');
+const appVersion = document.querySelector('#app-version');
 const searchForm = document.querySelector('#search-form');
 const examSearch = document.querySelector('#exam-search');
 const examStatusFilter = document.querySelector('#exam-status-filter');
@@ -59,6 +61,17 @@ let currentLanguage = 'en';
 let darkModeEnabled = false;
 let autosaveTimer = null;
 let lastAutosaveAt = null;
+
+async function loadAppInfo() {
+  try {
+    const info = await requestJson('/api/app-info');
+    appVersion.textContent = `v${info.version}`;
+    downloadApp.href = info.downloadUrl;
+  } catch (error) {
+    appVersion.textContent = 'unavailable';
+    downloadApp.removeAttribute('download');
+  }
+}
 
 function setStatus(element, message, isError = false) {
   element.textContent = message;
@@ -981,6 +994,7 @@ document.addEventListener('visibilitychange', () => {
 addStudentRow();
 addQuestionRow();
 translateUi();
+loadAppInfo();
 applyTheme();
 restoreExaminerSession();
 restoreStudentSession();

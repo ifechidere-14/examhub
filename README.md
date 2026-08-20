@@ -20,6 +20,18 @@ On Windows PowerShell, use `npm.cmd install`, `npm.cmd run db:init`, and `npm.cm
 
 Open `http://localhost:3000`.
 
+## Windows app
+
+The header download button serves the versioned Windows installer built with Electron. Set `EXAMHUB_APP_URL` when building if the deployed web app is not at the default Render URL, then run:
+
+```bash
+npm run electron:build
+```
+
+The installer is written to `public/downloads/ExamHub-Setup-v<version>.exe`. The installed app loads the hosted ExamHub site. You can override its destination at launch with `--app-url=https://your-examhub.example.com`.
+
+If the Electron runtime cannot be downloaded during a build, the included Windows launcher source can still produce a working EXE with PowerShell. It opens the hosted ExamHub app in the user's default browser.
+
 ## CockroachDB Schema
 
 The database code is in `db/schema.sql`.

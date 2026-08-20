@@ -32,6 +32,28 @@ body {
   border-bottom: 1px solid var(--line);
 }
 
+.download-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 42px;
+  padding: 10px 14px;
+  color: #fff;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.download-button:hover {
+  background: var(--accent-dark);
+}
+
+.download-button span {
+  margin-left: 5px;
+  opacity: 0.8;
+}
+
 .topbar p,
 .section-heading p {
   margin: 0 0 6px;

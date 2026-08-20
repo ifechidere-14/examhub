@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { Pool } = require('pg');
+const packageInfo = require('./package.json');
 require('dotenv').config();
 
 const app = express();
@@ -101,6 +102,15 @@ const pool = new Pool({
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+app.get('/api/app-info', (req, res) => {
+  res.json({
+    name: 'ExamHub',
+    version: packageInfo.version,
+    platform: 'Windows',
+    downloadUrl: `/downloads/ExamHub-Setup-v${packageInfo.version}.exe`
+  });
+});
 
 function normalizeExamStatus(status, allowAll = false) {
   const value = String(status || 'draft').toLowerCase();

@@ -7,12 +7,39 @@
     "start": "node server.js",
     "dev": "node server.js",
     "db:init": "node scripts/init-db.js",
-    "test": "node --test"
+    "test": "node --test",
+    "electron:build": "electron-builder --win nsis"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "pg": "^8.13.1"
-  }
+  },
+  "devDependencies": {
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.examhub.desktop",
+    "productName": "ExamHub",
+    "asar": true,
+    "files": [
+      "electron-main.js",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false
+    },
+    "directories": {
+      "output": "public/downloads"
+    },
+    "artifactName": "ExamHub-Setup-v${version}.${ext}"
+  },
+  "allowScripts": {}
 }
